@@ -3,7 +3,7 @@ import { hide, number, string } from "yargs";
 import { Cmnds, H } from "./Cmnd";
 import pkg from "whatsapp-web.js";
 import { client, READY, readyPromise } from "./wweb";
-import { version } from "node:process";
+import { exit, version } from "node:process";
 
 // import blessed from "neo-blessed";
 // import * as blessed from 'neo-blessed';
@@ -48,7 +48,7 @@ class Chats {
         })
     }
 
-    reloadChats(){
+    reloadChats() {
         client.getChats().then((chatsFound) => {
             chatsFound.forEach(chat => {
                 if (!chat.archived)
@@ -103,7 +103,7 @@ class Chats {
     }
 
     normalizeIndexes() {
-        this.chats.sort((a, b)=>a.Zindex-b.Zindex)
+        this.chats.sort((a, b) => a.Zindex - b.Zindex)
         for (let i = 0; i < this.chats.length; i++) {
             this.chats[i].setIndex(i);
         }
@@ -132,6 +132,7 @@ class Chat {
     manager: Chats;
     indicator: Widgets.BoxElement;
     Zindex: number = 0;
+    msgcount: number = 0;
     constructor(manager: Chats, chatStruct: pkg.Chat) {
         this.chatStruct = chatStruct;
         this.manager = manager;
@@ -143,7 +144,7 @@ class Chat {
             // bottom: 0,
             right: 0,
             width: "100%",
-            height: 3,
+            height: 4,
             border: "line",
             content: H(chatStruct.name),
             style: {
@@ -174,15 +175,20 @@ class Chat {
         screen.render()
     }
 
+    updateStruct(ch: pkg.Chat) {
+        this.chatStruct = ch;
+        this.updateIndicator()
+        screen.render();
+    }
+
     setIndex(z: number) {
         this.Zindex = z;
-        this.element.setIndex(this.Zindex)
+        this.element.setIndex(this.Zindex);
         this.updateIndicator();
     }
     modIndex(dz: number) {
         this.Zindex += dz;
-        this.element.setIndex(this.Zindex)
-        this.updateIndicator();
+        this.setIndex(this.Zindex);
     }
 
     updateIndicator() {
@@ -193,6 +199,7 @@ class Chat {
             this.indicator.setContent(msgnum.toString())
             this.indicator.show()
         }
+        screen.render()
     }
 
 
@@ -292,10 +299,30 @@ readyPromise.then(() => {
     let Gui = new GUI()
 
     client.on("message_create", async (message) => {
-        let chat = Gui.normalChats.matchChat((await message.getChat()).id._serialized)
-        if (chat != undefined)
-            Gui.normalChats.elevateChat(chat)
+        // let chat = Gui.normalChats.matchChat((await message.getChat()).id._serialized)
+        // if (chat != undefined) {
+        //     Gui.normalChats.elevateChat(chat)
+        // }
+
+        message.getChat().then((ch)=>{
+            let chat = Gui.normalChats.matchChat(ch.id._serialized)
+            if (chat != undefined) {
+                Gui.normalChats.elevateChat(chat)
+            }
+        })
     })
+
+    client.on("unread_count", (ch)=>{
+        let chat = Gui.normalChats.matchChat(ch.id._serialized)
+        if (chat != undefined) {
+            chat.updateStruct(ch);
+        }
+        else {
+            console.log(ch);
+            exit()   
+        }
+    })
+
 
     // setInterval(Gui.render, 500)
     // client.getChats().then((chats)=>{

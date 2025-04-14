@@ -37,8 +37,8 @@ client.on("qr", (qr) => {
 
 client.on("message", async (message) => {
     // console.log(message);
-    let chat = (await client.getChatById((await message.getChat()).id._serialized))
-    chat.lastMessage
+    // let chat = (await client.getChatById((await message.getChat()).id._serialized))
+    // chat.lastMessage
     // console.log(chat.name);
 
     // console.log(await chat.lastMessage.body);
