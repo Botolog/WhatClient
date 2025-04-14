@@ -40,6 +40,15 @@ class Chats {
             },
             layout: "inline"
         })
+        this.reloadChats()
+
+        screen.on("resize", () => {
+            this.calcHideShow()
+            this.hideShow()
+        })
+    }
+
+    reloadChats(){
         client.getChats().then((chatsFound) => {
             chatsFound.forEach(chat => {
                 if (!chat.archived)
@@ -48,11 +57,6 @@ class Chats {
             this.hideShow();
             console.log("COOOOOOOOOOOOOL");
 
-        })
-
-        screen.on("resize", () => {
-            this.calcHideShow()
-            this.hideShow()
         })
     }
 
@@ -69,7 +73,7 @@ class Chats {
         this.chats.forEach(ch => {
             allIndexes.push(ch.Zindex)
         });
-        allIndexes = allIndexes.sort((a, b) => a - b)
+        allIndexes.sort((a, b) => a - b)
         let indexes = allIndexes.slice(0, this.num2display + 1)
         this.chats.forEach(ch => {
             if (indexes.includes(ch.Zindex)) { ch.element.show() }
@@ -93,8 +97,16 @@ class Chats {
                 ch.modIndex(3)
         });
         chat.setIndex(3);
+        this.normalizeIndexes()
         this.hideShow()
         chat.updateIndicator();
+    }
+
+    normalizeIndexes() {
+        this.chats.sort((a, b)=>a.Zindex-b.Zindex)
+        for (let i = 0; i < this.chats.length; i++) {
+            this.chats[i].setIndex(i);
+        }
     }
 
     findChat(name: string) {
@@ -119,7 +131,7 @@ class Chat {
     element: Widgets.BoxElement;
     manager: Chats;
     indicator: Widgets.BoxElement;
-    Zindex: number = -1;
+    Zindex: number = 0;
     constructor(manager: Chats, chatStruct: pkg.Chat) {
         this.chatStruct = chatStruct;
         this.manager = manager;
@@ -153,8 +165,8 @@ class Chat {
         })
 
 
-        if (chatStruct.pinned)
-            this.modIndex(-5)
+        // if (chatStruct.pinned)
+        //     this.modIndex(-1)
         //  this.element.index -= 10
 
         this.updateIndicator()
@@ -174,13 +186,13 @@ class Chat {
     }
 
     updateIndicator() {
-        let msgnum = this.Zindex
-        // let msgnum = this.chatStruct.unreadCount
-        // if (msgnum <= 0) this.indicator.hide()
-        // else {
-        this.indicator.setContent(msgnum.toString())
-        this.indicator.show()
-        // }
+        // let msgnum = this.Zindex
+        let msgnum = this.chatStruct.unreadCount
+        if (msgnum <= 0) this.indicator.hide()
+        else {
+            this.indicator.setContent(msgnum.toString())
+            this.indicator.show()
+        }
     }
 
 
@@ -195,7 +207,7 @@ class GUI {
         left: 0,
         // right: 0,
         // width: "100%",
-        height: "82%",
+        height: "100%-10",
         border: "line",
         style: {
             bg: "yellow"
