@@ -1,29 +1,40 @@
-import blessed, { message, Widgets } from "blessed";
+import blessed, { BlessedProgram, message, Widgets } from "blessed";
 import { hide, number, string } from "yargs";
-import { Cmnds, H } from "./Cmnd";
+import { CmndsManager } from "./Cmnd";
 import pkg from "whatsapp-web.js";
 import { client, READY, readyPromise } from "./wweb";
 import { exit, version } from "node:process";
+import { H } from "./funcs";
 
 // import blessed from "neo-blessed";
 // import * as blessed from 'neo-blessed';
 // const blessed = require("neo-blessed") as any;
 
 
-var cmnds = new Cmnds()
 
 var screen: Widgets.Screen = blessed.screen({
     // dump: __dirname + '/logs/shadow.log',
+    fastCSR: true,
     smartCSR: true,
+    useBCE: true,
+    cursor: {
+        shape: "line",
+        artificial: true,
+        color: "black",
+        blink: true
+    },
+    
     title: "WhatClient 0.0.1 " + version
     // dockBorders: true,
     // warnings: true,
+    
 });
 
 class Chats {
     gui: GUI;
     element: Widgets.LayoutElement;
     chats: Chat[] = [];
+    selectedChat: Chat|undefined;
     num2display: number = 10;
     constructor(gui: GUI) {
         this.gui = gui
@@ -89,6 +100,24 @@ class Chats {
         this.chats.push(ch)
     }
 
+    selectChat(names: string[]){
+        this.chats.forEach(ch => {
+            ch.unselect()
+        });
+        let chats:Chat[] = [];
+        names.forEach(nam => {
+            chats = chats.concat(this.chats.filter(ch => ch.chatStruct.name.toLowerCase().includes(nam.toLowerCase())))
+        })
+
+        chats.sort((a, b)=>a.Zindex-b.Zindex)
+        let chat = chats[0]
+        if (chat)
+            this.selectedChat = chat.select();
+        else 
+            this.gui.inputBar.setContent(`not found: ${names}`)
+        this.gui.render()
+    }
+
     elevateChat(chat: Chat) {
         // return
         if (chat.chatStruct.pinned) return
@@ -133,6 +162,10 @@ class Chat {
     indicator: Widgets.BoxElement;
     Zindex: number = 0;
     msgcount: number = 0;
+    selected: boolean = false;
+
+    regBg: string = "red";
+
     constructor(manager: Chats, chatStruct: pkg.Chat) {
         this.chatStruct = chatStruct;
         this.manager = manager;
@@ -148,7 +181,7 @@ class Chat {
             border: "line",
             content: H(chatStruct.name),
             style: {
-                bg: "red"
+                bg: this.regBg
             },
         })
 
@@ -202,19 +235,50 @@ class Chat {
         screen.render()
     }
 
+    select() {
+        this.selected = true
+        this.element.style.bg = "blue"
+        return this
+    }
+
+    unselect() {
+        this.selected = false
+        this.element.style.bg = this.regBg
+        return this
+    }
+
 
 }
 
-class GUI {
+class InfoWindow{
+    gui: GUI;
+    element: Widgets.BoxElement;
 
+    constructor (gui: GUI){
+        this.gui = gui;
+        this.element = blessed.box({
+            parent: gui.mainDisplay,
+            top: 0,
+            right: 0,
+            height: "100% - 1",
+            width: `100% - ${gui.currentChats.element.width}`,
+            style: {
+                bg: "blue"
+            },
+            border: "line",
 
+        })
+    }
+}
+
+export class GUI {
     mainDisplay: Widgets.BoxElement = blessed.box({
         parent: screen,
         top: 0,
         left: 0,
         // right: 0,
         // width: "100%",
-        height: "100%-10",
+        height: "100%-5",
         border: "line",
         style: {
             bg: "yellow"
@@ -226,9 +290,12 @@ class GUI {
     input: Widgets.TextboxElement;
 
     normalChats: Chats = new Chats(this);
+    currentChats: Chats;
+
+    currentInfo: InfoWindow;
 
     constructor() {
-
+        
         this.inputBar = blessed.box({
             parent: screen,
             bottom: 0,
@@ -262,6 +329,8 @@ class GUI {
             focusable: true,
             // clickable:true,
         })
+        this.currentChats = this.normalChats;
+        this.currentInfo = new InfoWindow(this);
 
         this.input.on("focus", () => {
             this.input.readInput();
@@ -278,7 +347,7 @@ class GUI {
         })
 
         this.input.key("return", async () => {
-            cmnds.add(this.input.getText())
+            cmnds.return(this.input.getText())
             this.input.clearValue()
             this.input.focus()
 
@@ -289,14 +358,21 @@ class GUI {
         this.render()
     }
 
+    warn(txt: string){
+        this.mainDisplay
+    }
+
     render() {
         screen.render();
     }
 }
 
+
+var cmnds:CmndsManager;
 readyPromise.then(() => {
 
     let Gui = new GUI()
+    cmnds = new CmndsManager(Gui)
 
     client.on("message_create", async (message) => {
         // let chat = Gui.normalChats.matchChat((await message.getChat()).id._serialized)
@@ -318,8 +394,8 @@ readyPromise.then(() => {
             chat.updateStruct(ch);
         }
         else {
-            console.log(ch);
-            exit()   
+            // console.log(ch);
+            // exit()   
         }
     })
 
