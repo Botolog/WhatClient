@@ -12,3 +12,11 @@ node_modules
 .vscode
 .wwebjs_auth
 .wwebjs_cache
+
+# Log files
+*.log
+whatclient.log
+whatsapp-test.log
+
+# Build output
+dist/
