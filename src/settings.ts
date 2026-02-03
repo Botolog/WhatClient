@@ -28,11 +28,32 @@ export interface AppSettings {
   autoDownloadMedia: "always" | "wifi" | "never"
   mediaQuality: "low" | "medium" | "high"
   
+  // Media Display
+  mediaDisplayMode: "auto" | "indicator" | "ascii" | "kitty" | "iterm2" | "sixel" | "http"
+  showMediaThumbnails: boolean
+  maxThumbnailSize: number // pixels
+  autoDownloadMediaOnEnter: boolean // Auto-download all media when entering chat
+  
   // Advanced
   developerMode: boolean
   logLevel: "debug" | "info" | "warn" | "error"
   autoReconnect: boolean
   connectionTimeout: number
+  mouseNaturalScroll: boolean
+  mouseScrollSpeed: number // Lines scrolled per wheel tick (1-10)
+  
+  // WhatsApp Settings
+  whatsapp: {
+    autoMarkAsRead: boolean
+    deleteOldMessages: boolean
+    deleteOlderThan: number // days
+  }
+  
+  // Slack Settings
+  slack: {
+    showThreads: boolean
+    autoExpandThreads: boolean
+  }
 }
 
 const DEFAULT_SETTINGS: AppSettings = {
@@ -55,10 +76,28 @@ const DEFAULT_SETTINGS: AppSettings = {
   autoDownloadMedia: "wifi",
   mediaQuality: "medium",
   
+  mediaDisplayMode: "auto",
+  showMediaThumbnails: true,
+  maxThumbnailSize: 80,
+  autoDownloadMediaOnEnter: false,
+  
   developerMode: false,
   logLevel: "info",
   autoReconnect: true,
   connectionTimeout: 60,
+  mouseNaturalScroll: true,
+  mouseScrollSpeed: 3,
+  
+  whatsapp: {
+    autoMarkAsRead: true,
+    deleteOldMessages: false,
+    deleteOlderThan: 30,
+  },
+  
+  slack: {
+    showThreads: true,
+    autoExpandThreads: false,
+  },
 }
 
 let currentSettings: AppSettings = { ...DEFAULT_SETTINGS }
@@ -102,16 +141,42 @@ export function updateSetting<K extends keyof AppSettings>(key: K, value: AppSet
   saveSettings(currentSettings)
 }
 
+// Helper to get nested settings value
+export function getNestedSetting(key: string): any {
+  const parts = key.split('.')
+  let value: any = currentSettings
+  for (const part of parts) {
+    value = value?.[part]
+  }
+  return value
+}
+
+// Helper to set nested settings value
+export function setNestedSetting(key: string, value: any): void {
+  const parts = key.split('.')
+  if (parts.length === 1) {
+    updateSetting(key as keyof AppSettings, value)
+  } else {
+    // Handle nested properties like "whatsapp.autoMarkAsRead"
+    const obj: any = currentSettings
+    for (let i = 0; i < parts.length - 1; i++) {
+      if (!obj[parts[i]]) obj[parts[i]] = {}
+    }
+    obj[parts[parts.length - 2]][parts[parts.length - 1]] = value
+    saveSettings(currentSettings)
+  }
+}
+
 // Settings menu structure for the TUI
 export interface SettingItem {
   id: string
   label: string
   type: "toggle" | "radio" | "select" | "button" | "number" | "header"
-  key?: keyof AppSettings
+  key?: keyof AppSettings | string // Allow nested keys like "whatsapp.autoMarkAsRead"
   options?: { value: string; label: string }[]
   min?: number
   max?: number
-  action?: () => void
+  action?: () => void | Promise<void>
 }
 
 export interface SettingSection {
@@ -119,7 +184,14 @@ export interface SettingSection {
   items: SettingItem[]
 }
 
-export const SETTINGS_MENU: SettingSection[] = [
+export interface SettingsPage {
+  id: string
+  title: string
+  sections: SettingSection[]
+}
+
+// Main settings page
+const MAIN_SETTINGS: SettingSection[] = [
   {
     title: "🎨 Appearance",
     items: [
@@ -168,6 +240,7 @@ export const SETTINGS_MENU: SettingSection[] = [
         { value: "medium", label: "Medium" },
         { value: "high", label: "High" },
       ]},
+      { id: "autoDownloadMediaOnEnter", label: "Auto-download Media on Chat Open", type: "toggle", key: "autoDownloadMediaOnEnter" },
     ]
   },
   {
@@ -182,11 +255,14 @@ export const SETTINGS_MENU: SettingSection[] = [
       ]},
       { id: "autoReconnect", label: "Auto Reconnect", type: "toggle", key: "autoReconnect" },
       { id: "connectionTimeout", label: "Connection Timeout (s)", type: "number", key: "connectionTimeout", min: 10, max: 300 },
+      { id: "mouseNaturalScroll", label: "Mouse Natural Scroll", type: "toggle", key: "mouseNaturalScroll" },
+      { id: "mouseScrollSpeed", label: "Mouse Scroll Speed (lines)", type: "number", key: "mouseScrollSpeed", min: 1, max: 10 },
     ]
   },
   {
     title: "📋 Actions",
     items: [
+      { id: "clearMediaCache", label: "Clear Media Cache", type: "button" },
       { id: "clearCache", label: "Clear Cache", type: "button", action: () => { /* TODO */ } },
       { id: "exportSettings", label: "Export Settings", type: "button", action: () => { /* TODO */ } },
       { id: "resetSettings", label: "Reset to Defaults", type: "button", action: () => { 
@@ -196,3 +272,36 @@ export const SETTINGS_MENU: SettingSection[] = [
     ]
   },
 ]
+
+// WhatsApp service settings
+const WHATSAPP_SETTINGS: SettingSection[] = [
+  {
+    title: "📱 WhatsApp",
+    items: [
+      { id: "whatsapp.autoMarkAsRead", label: "Auto Mark as Read", type: "toggle", key: "whatsapp.autoMarkAsRead" },
+      { id: "whatsapp.deleteOldMessages", label: "Delete Old Messages", type: "toggle", key: "whatsapp.deleteOldMessages" },
+      { id: "whatsapp.deleteOlderThan", label: "Delete Messages Older Than (days)", type: "number", key: "whatsapp.deleteOlderThan", min: 1, max: 365 },
+    ]
+  },
+]
+
+// Slack service settings
+const SLACK_SETTINGS: SettingSection[] = [
+  {
+    title: "💼 Slack",
+    items: [
+      { id: "slack.showThreads", label: "Show Threads", type: "toggle", key: "slack.showThreads" },
+      { id: "slack.autoExpandThreads", label: "Auto Expand Threads", type: "toggle", key: "slack.autoExpandThreads" },
+    ]
+  },
+]
+
+// All settings pages
+export const SETTINGS_PAGES: SettingsPage[] = [
+  { id: "main", title: "Main Settings", sections: MAIN_SETTINGS },
+  { id: "whatsapp", title: "WhatsApp", sections: WHATSAPP_SETTINGS },
+  { id: "slack", title: "Slack", sections: SLACK_SETTINGS },
+]
+
+// Legacy export for backward compatibility
+export const SETTINGS_MENU: SettingSection[] = MAIN_SETTINGS

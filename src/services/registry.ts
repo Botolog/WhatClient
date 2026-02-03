@@ -151,6 +151,27 @@ export const SERVICES: Record<string, ServiceConfig> = {
       titleBar: "#0DBD8B",
     }
   },
+  settings: {
+    id: "settings",
+    name: "Settings",
+    icon: "⚙️",
+    description: "App Settings & Configuration",
+    enabled: true,
+    hasAuth: false,
+    theme: {
+      bg: "#0D1117",
+      surface: "#161B22",
+      surfaceLight: "#21262D",
+      border: "#30363D",
+      primary: "#58A6FF",
+      text: "#C9D1D9",
+      textMuted: "#8B949E",
+      sent: "#161B22",
+      received: "#21262D",
+      accent: "#58A6FF",
+      titleBar: "#161B22",
+    }
+  },
 }
 
 export function getService(id: string): ServiceConfig | null {

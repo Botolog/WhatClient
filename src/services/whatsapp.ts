@@ -3,6 +3,7 @@ const { Client, LocalAuth } = pkg
 import qrcode from "qrcode-terminal"
 import { EventEmitter } from "events"
 import { Logger } from "../utils/logger"
+import { mediaCache } from "../utils/mediaCache"
 
 const logger = new Logger("whatsapp.log", "WhatsApp")
 
@@ -22,6 +23,16 @@ export interface ChatData {
   }
 }
 
+export interface MediaAttachment {
+  type: 'image' | 'video' | 'audio' | 'document' | 'sticker'
+  mimetype: string
+  filename?: string
+  filesize?: number
+  data?: string // Base64 or file path after download
+  url?: string
+  thumbnail?: string // Base64 thumbnail
+}
+
 export interface MessageData {
   id: string
   body: string
@@ -37,6 +48,7 @@ export interface MessageData {
   isStarred?: boolean
   hasQuotedMsg?: boolean
   quotedMsgBody?: string
+  media?: MediaAttachment
 }
 
 export interface ContactData {
@@ -328,20 +340,106 @@ class WhatsAppService extends EventEmitter {
     }
   }
 
-  async sendMessage(chatId: string, content: string): Promise<MessageData | null> {
-    logger.info("WhatsApp", "sendMessage() called", { chatId, contentLength: content.length })
+  async sendMessage(chatId: string, content: string, options?: { replyTo?: string }): Promise<MessageData | null> {
+    logger.info("WhatsApp", "sendMessage() called", { chatId, contentLength: content.length, replyTo: options?.replyTo })
     if (!this.ready) {
       logger.warn("WhatsApp", "sendMessage() called but not ready")
       return null
     }
     try {
       const chat = await this.client.getChatById(chatId)
-      const message = await chat.sendMessage(content)
+      
+      // If replying to a message, fetch the quoted message
+      let message
+      if (options?.replyTo) {
+        try {
+          const messages = await chat.fetchMessages({ limit: 100 })
+          const quotedMsg = messages.find(m => m.id._serialized === options.replyTo)
+          if (quotedMsg) {
+            message = await quotedMsg.reply(content)
+            logger.info("WhatsApp", "Reply sent", { messageId: message.id._serialized, quotedMsgId: options.replyTo })
+          } else {
+            logger.warn("WhatsApp", "Quoted message not found, sending normal message", { quotedMsgId: options.replyTo })
+            message = await chat.sendMessage(content)
+          }
+        } catch (err) {
+          logger.error("WhatsApp", "Error sending reply, falling back to normal message", err)
+          message = await chat.sendMessage(content)
+        }
+      } else {
+        message = await chat.sendMessage(content)
+      }
+      
       logger.info("WhatsApp", "Message sent", { messageId: message.id._serialized })
       return this.formatMessage(message)
     } catch (err) {
       logger.error("WhatsApp", "sendMessage() error", err)
       return null
+    }
+  }
+
+  async deleteMessage(messageId: string, chatId: string, forMe: boolean): Promise<boolean> {
+    logger.info("WhatsApp", "deleteMessage() called", { messageId, chatId, forMe })
+    if (!this.ready) {
+      logger.warn("WhatsApp", "deleteMessage() called but not ready")
+      return false
+    }
+    try {
+      const chat = await this.client.getChatById(chatId)
+      const messages = await chat.fetchMessages({ limit: 100 })
+      const message = messages.find(m => m.id._serialized === messageId)
+      
+      if (!message) {
+        logger.warn("WhatsApp", "Message not found for deletion", { messageId })
+        return false
+      }
+      
+      // Delete for everyone or just for me
+      if (forMe) {
+        await message.delete(true) // true = delete for me only
+        logger.info("WhatsApp", "Message deleted for me", { messageId })
+      } else {
+        await message.delete(false) // false = delete for everyone
+        logger.info("WhatsApp", "Message deleted for everyone", { messageId })
+      }
+      
+      return true
+    } catch (err) {
+      logger.error("WhatsApp", "deleteMessage() error", err)
+      return false
+    }
+  }
+
+  async editMessage(messageId: string, chatId: string, newText: string): Promise<boolean> {
+    logger.info("WhatsApp", "editMessage() called", { messageId, chatId, newTextLength: newText.length })
+    if (!this.ready) {
+      logger.warn("WhatsApp", "editMessage() called but not ready")
+      return false
+    }
+    try {
+      const chat = await this.client.getChatById(chatId)
+      const messages = await chat.fetchMessages({ limit: 100 })
+      const message = messages.find(m => m.id._serialized === messageId)
+      
+      if (!message) {
+        logger.warn("WhatsApp", "Message not found for editing", { messageId })
+        return false
+      }
+      
+      // Check if message is from me
+      if (!message.fromMe) {
+        logger.warn("WhatsApp", "Cannot edit message not from me", { messageId })
+        return false
+      }
+      
+      // Edit the message
+      await message.edit(newText)
+      logger.info("WhatsApp", "Message edited successfully", { messageId })
+      
+      return true
+    } catch (err) {
+      logger.error("WhatsApp", "editMessage() error", err)
+      return false
     }
   }
 
@@ -465,9 +563,32 @@ class WhatsAppService extends EventEmitter {
     logger.debug("WhatsApp", "formatMessage() called", { 
       id: message.id._serialized, 
       fromMe: message.fromMe, 
-      type: message.type 
+      type: message.type,
+      hasMedia: message.hasMedia
     })
     const msgAny = message as any
+    
+    // Extract media info if present
+    let media: MediaAttachment | undefined
+    if (message.hasMedia) {
+      const mediaType = this.getMediaType(message.type)
+      const filename = msgAny._data?.filename || msgAny.filename || 'media'
+      
+      media = {
+        type: mediaType,
+        mimetype: msgAny.mimetype || 'application/octet-stream',
+        filename: filename,
+        filesize: msgAny.filesize || msgAny._data?.size,
+        // Store message ID and timestamp for cache lookup
+        data: message.id._serialized,
+      }
+      logger.debug("WhatsApp", "Message has media", { 
+        type: mediaType, 
+        mimetype: media.mimetype,
+        filename: media.filename
+      })
+    }
+    
     return {
       id: message.id._serialized,
       body: message.body || "",
@@ -482,6 +603,81 @@ class WhatsAppService extends EventEmitter {
       isStarred: msgAny.isStarred || false,
       hasQuotedMsg: msgAny.hasQuotedMsg || false,
       quotedMsgBody: msgAny._data?.quotedMsg?.body,
+      media,
+    }
+  }
+
+  private getMediaType(messageType: string): MediaAttachment['type'] {
+    if (messageType.includes('image')) return 'image'
+    if (messageType.includes('video')) return 'video'
+    if (messageType.includes('audio') || messageType.includes('ptt')) return 'audio'
+    if (messageType.includes('sticker')) return 'sticker'
+    return 'document'
+  }
+
+  async downloadMedia(messageId: string, chatId: string): Promise<string | null> {
+    logger.info("WhatsApp", "downloadMedia() called", { messageId, chatId })
+    if (!this.ready) {
+      logger.warn("WhatsApp", "downloadMedia() called but not ready")
+      return null
+    }
+
+    try {
+      // Get the chat and fetch the specific message
+      const chat = await this.client.getChatById(chatId)
+      const chatName = chat.name || chatId
+      const messages = await chat.fetchMessages({ limit: 100 })
+      const waMessage = messages.find((m: any) => m.id._serialized === messageId)
+      
+      if (!waMessage || !waMessage.hasMedia) {
+        logger.warn("WhatsApp", "Message not found or has no media", { messageId })
+        return null
+      }
+
+      const msgAny = waMessage as any
+      const filename = msgAny._data?.filename || msgAny.filename || 'media'
+      // Use MESSAGE timestamp, not current time!
+      const timestamp = waMessage.timestamp
+      const mimetype = msgAny.mimetype || 'application/octet-stream'
+      
+      logger.info("WhatsApp", "Media info extracted", { 
+        filename, 
+        timestamp, 
+        messageDate: new Date(timestamp * 1000).toISOString()
+      })
+      
+      // Check cache first
+      const cached = mediaCache.get(chatName, filename, timestamp, mimetype)
+      if (cached) {
+        logger.info("WhatsApp", "Media found in cache", { messageId, cached })
+        return cached
+      }
+
+      logger.info("WhatsApp", "Downloading media...")
+      const media = await waMessage.downloadMedia()
+      
+      if (!media) {
+        logger.error("WhatsApp", "Failed to download media")
+        return null
+      }
+
+      // Cache the media with chatname+filename+timestamp hash
+      const buffer = Buffer.from(media.data, 'base64')
+      const filePath = await mediaCache.cache(chatName, filename, timestamp, buffer, media.mimetype)
+      
+      logger.info("WhatsApp", "Media downloaded and cached", { 
+        messageId,
+        chatName,
+        filename,
+        filePath,
+        size: buffer.length,
+        mimetype: media.mimetype
+      })
+
+      return filePath
+    } catch (err) {
+      logger.error("WhatsApp", "downloadMedia() error", err)
+      return null
     }
   }
 

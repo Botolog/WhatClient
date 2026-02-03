@@ -11,7 +11,9 @@ export interface MessagingService extends EventEmitter {
   isReady(): boolean
   getChats(): Promise<ChatData[]>
   getMessages(chatId: string, limit?: number): Promise<MessageData[]>
-  sendMessage(chatId: string, content: string): Promise<MessageData | null>
+  sendMessage(chatId: string, content: string, options?: { replyTo?: string }): Promise<MessageData | null>
+  deleteMessage(messageId: string, chatId: string, forMe: boolean): Promise<boolean>
+  editMessage(messageId: string, chatId: string, newText: string): Promise<boolean>
   markAsRead(chatId: string): Promise<void>
   pinChat(chatId: string, pin: boolean): Promise<boolean>
   muteChat(chatId: string, mute: boolean): Promise<boolean>
