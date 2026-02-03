@@ -2,7 +2,9 @@ import pkg from "whatsapp-web.js"
 const { Client, LocalAuth } = pkg
 import qrcode from "qrcode-terminal"
 import { EventEmitter } from "events"
-import { logger } from "../utils/logger"
+import { Logger } from "../utils/logger"
+
+const logger = new Logger("whatsapp.log", "WhatsApp")
 
 export interface ChatData {
   id: string

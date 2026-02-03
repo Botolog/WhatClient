@@ -12,6 +12,8 @@ node_modules
 .vscode
 .wwebjs_auth
 .wwebjs_cache
+.whatclient-settings.json
+.slack-tokens.json
 
 # Log files
 *.log

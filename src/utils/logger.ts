@@ -1,7 +1,5 @@
 import { appendFileSync, writeFileSync } from "fs"
 
-const LOG_FILE = "whatclient.log"
-
 function timestamp(): string {
   return new Date().toISOString()
 }
@@ -18,20 +16,27 @@ function formatMessage(level: string, context: string, message: string, data?: a
   return line + "\n"
 }
 
-export const logger = {
-  init() {
-    writeFileSync(LOG_FILE, `=== WhatsApp TUI Log Started ${timestamp()} ===\n`)
-  },
+export class Logger {
+  private logFile: string
+
+  constructor(logFile: string, serviceName: string = "Service") {
+    this.logFile = logFile
+    this.init(serviceName)
+  }
+
+  private init(serviceName: string) {
+    writeFileSync(this.logFile, `=== ${serviceName} Log Started ${timestamp()} ===\n`)
+  }
 
   info(context: string, message: string, data?: any) {
     const line = formatMessage("INFO", context, message, data)
-    appendFileSync(LOG_FILE, line)
-  },
+    appendFileSync(this.logFile, line)
+  }
 
   warn(context: string, message: string, data?: any) {
     const line = formatMessage("WARN", context, message, data)
-    appendFileSync(LOG_FILE, line)
-  },
+    appendFileSync(this.logFile, line)
+  }
 
   error(context: string, message: string, error?: any) {
     let errorData: any = undefined
@@ -43,16 +48,19 @@ export const logger = {
       }
     }
     const line = formatMessage("ERROR", context, message, errorData)
-    appendFileSync(LOG_FILE, line)
-  },
+    appendFileSync(this.logFile, line)
+  }
 
   debug(context: string, message: string, data?: any) {
     const line = formatMessage("DEBUG", context, message, data)
-    appendFileSync(LOG_FILE, line)
-  },
+    appendFileSync(this.logFile, line)
+  }
 
   event(context: string, eventName: string, data?: any) {
     const line = formatMessage("EVENT", context, `Event: ${eventName}`, data)
-    appendFileSync(LOG_FILE, line)
-  },
+    appendFileSync(this.logFile, line)
+  }
 }
+
+// Default logger instance for backward compatibility
+export const logger = new Logger("whatclient.log", "WhatClient")
