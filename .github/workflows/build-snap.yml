@@ -40,12 +40,25 @@ jobs:
           sudo usermod -a -G lxd $USER
           sudo chown root:lxd /var/snap/lxd/common/lxd/unix.socket
           sudo chmod g+rw /var/snap/lxd/common/lxd/unix.socket
+          
+      - name: Configure LXD network
+        run: |
+          sudo lxd waitready
+          sudo lxc network set lxdbr0 ipv6.address none
+          sudo systemctl reload snap.lxd.daemon
+          sleep 5
+          
+      - name: Test LXD connectivity
+        run: |
+          sg lxd -c 'lxc launch ubuntu:22.04 test-connectivity'
+          sg lxd -c 'lxc exec test-connectivity -- echo "LXD connectivity test successful"'
+          sg lxd -c 'lxc delete test-connectivity --force'
 
       - name: Build snap package
         id: build-snap
         run: |
           echo "Building snap package..."
-          sg lxd -c 'snapcraft pack'
+          sg lxd -c 'snapcraft pack --use-lxd'
           SNAP_FILE=$(ls chitchat_*.snap)
           echo "snap-filename=$SNAP_FILE" >> $GITHUB_OUTPUT
           echo "✓ Built snap: $SNAP_FILE"
