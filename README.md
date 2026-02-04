@@ -1,4 +1,4 @@
-# WhatClient
+# ChitChat
 
 Universal terminal messaging client built with OpenTUI.
 

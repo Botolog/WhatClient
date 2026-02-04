@@ -7,7 +7,7 @@
     "whatsapp-web.js": "^1.34.6",
     "yargs": "^17.7.2"
   },
-  "name": "whatclient",
+  "name": "chitchat",
   "version": "0.0.1",
   "main": "src/index.js",
   "devDependencies": {
@@ -31,14 +31,14 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Botolog/WhatClient.git"
+    "url": "git+https://github.com/Botolog/ChitChat.git"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "bugs": {
-    "url": "https://github.com/Botolog/WhatClient/issues"
+    "url": "https://github.com/Botolog/ChitChat/issues"
   },
-  "homepage": "https://github.com/Botolog/WhatClient#readme",
+  "homepage": "https://github.com/Botolog/ChitChat#readme",
   "description": ""
 }

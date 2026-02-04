@@ -16,9 +16,9 @@ description: |
   Usage: chitchat [--demo]
 
 license: ISC
-website: https://github.com/Botolog/WhatClient
-issues: https://github.com/Botolog/WhatClient/issues
-source-code: https://github.com/Botolog/WhatClient
+website: https://github.com/Botolog/ChitChat
+issues: https://github.com/Botolog/ChitChat/issues
+source-code: https://github.com/Botolog/ChitChat
 
 confinement: strict
 grade: stable

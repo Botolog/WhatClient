@@ -2,7 +2,7 @@ import { existsSync, readFileSync, writeFileSync } from "fs"
 import { join } from "path"
 import { logger } from "./utils/logger"
 
-const SETTINGS_FILE = join(process.cwd(), ".whatclient-settings.json")
+const SETTINGS_FILE = join(process.cwd(), ".chitchat-settings.json")
 
 export interface AppSettings {
   // Appearance

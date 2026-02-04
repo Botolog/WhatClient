@@ -63,4 +63,4 @@ export class Logger {
 }
 
 // Default logger instance for backward compatibility
-export const logger = new Logger("whatclient.log", "WhatClient")
+export const logger = new Logger("chitchat.log", "ChitChat")
