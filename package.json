@@ -24,7 +24,10 @@
     "start": "bun run src/index.ts",
     "demo": "bun run src/index.ts --demo",
     "dev": "bun --watch run src/index.ts",
-    "test:whatsapp": "bun run src/test-whatsapp.ts"
+    "test:whatsapp": "bun run src/test-whatsapp.ts",
+    "build": "bun build src/index.ts --compile --minify --target=bun --outfile build/chitchat",
+    "build:snap": "snapcraft --use-lxd",
+    "build:snap-clean": "snapcraft clean && snapcraft --use-lxd"
   },
   "repository": {
     "type": "git",

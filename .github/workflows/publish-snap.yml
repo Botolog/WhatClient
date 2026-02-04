@@ -6,23 +6,24 @@ on:
 
 jobs:
   build-and-release:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install snapcraft with retries
+      - name: Install snapcraft
         run: |
-          for i in 1 2 3; do
-            sudo snap install snapcraft --classic && break || sleep 10
-          done
+          sudo snap install snapcraft --classic
+          sudo snap install lxd
+          sudo lxd init --auto
 
       - name: Build snap
         run: |
-          mkdir -p build
-          snapcraft --destructive-mode --output-file=build/${{ github.repository }}.snap
+          snapcraft --use-lxd
 
       - name: Upload and release to Snap Store
+        if: github.ref == 'refs/heads/main'
         env:
-          SNAPCRAFT_TOKEN: ${{ secrets.SNAPCRAFT_TOKEN }}
+          SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_TOKEN }}
         run: |
-          snapcraft upload build/*.snap --release=stable
+          echo "$SNAPCRAFT_STORE_CREDENTIALS" | snapcraft login --with -
+          snapcraft upload --release=stable chitchat_*.snap

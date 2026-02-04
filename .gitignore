@@ -23,3 +23,12 @@ whatsapp-test.log
 
 # Build output
 dist/
+build/
+
+# Snap build artifacts
+*.snap
+parts/
+prime/
+stage/
+*.snap-build
+
