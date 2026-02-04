@@ -20,7 +20,7 @@
 
 ### 4. **Media Renderer** (`src/utils/mediaRenderer.ts`)
 Implements ALL requested approaches:
-- **Indicator mode**: File icons (📷🎥🎵📎) + filename + size + "Press 'o' to open"
+- **Indicator mode**: File icons (📷🎥🎵📎) + filename + size + "'space' to open"
 - **ASCII art mode**: Image-to-ASCII conversion (placeholder for now)
 - **Kitty protocol**: Real image rendering using Kitty graphics protocol
 - **iTerm2 protocol**: Real image rendering using iTerm2 inline images
@@ -78,7 +78,7 @@ Defaults:
 ### For Users
 1. Media messages show with icon + filename + size
 2. In supported terminals (Kitty/iTerm2), images show inline
-3. Press 'o' on a media message to open in default app
+3. Press 'Space' on a media message to open in default app
 4. Configure display mode in Settings → Media Display
 
 ### For Developers

@@ -47,7 +47,7 @@ export class MediaRenderer {
     const size = this.formatFileSize(media.filesize)
     
     return [
-      `${icon} ${filename} (${size}) [Press 'o' to open]`
+      `${icon} ${filename} (${size}) ['space' to open]`
     ]
   }
 
@@ -75,7 +75,7 @@ export class MediaRenderer {
       
       return [
         ...asciiLines,
-        `${icon} ${filename} (${size}) [Press 'o' to open]`
+        `${icon} ${filename} (${size}) ['space' to open]`
       ]
     } catch (err) {
       // ASCII art not supported, fall back to indicator
@@ -109,7 +109,7 @@ export class MediaRenderer {
       
       return [
         kittyCmd,
-        `${icon} ${filename} (${size}) [Press 'o' to open]`
+        `${icon} ${filename} (${size}) ['space' to open]`
       ]
     } catch (err) {
       console.error("Kitty render error:", err)
@@ -143,7 +143,7 @@ export class MediaRenderer {
       
       return [
         iterm2Cmd,
-        `${icon} ${filename} (${size}) [Press 'o' to open]`
+        `${icon} ${filename} (${size}) ['space' to open]`
       ]
     } catch (err) {
       console.error("iTerm2 render error:", err)
@@ -173,7 +173,7 @@ export class MediaRenderer {
       
       return [
         stdout, // Sixel data
-        `${icon} ${filename} (${size}) [Press 'o' to open]`
+        `${icon} ${filename} (${size}) ['space' to open]`
       ]
     } catch (err) {
       // Sixel not supported, fall back to indicator
@@ -211,7 +211,7 @@ export class MediaRenderer {
       return [
         `${icon} ${filename} (${size})`,
         `📱 View in browser: ${serverUrl}`,
-        `[Press 'o' to open in default browser]`
+        `['space' to open]`
       ]
     } catch (err) {
       return this.renderMediaIndicator(media)

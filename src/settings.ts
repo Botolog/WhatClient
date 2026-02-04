@@ -27,6 +27,7 @@ export interface AppSettings {
   spellCheck: boolean
   autoDownloadMedia: "always" | "wifi" | "never"
   mediaQuality: "low" | "medium" | "high"
+  confirmDeleteMessage: boolean
   
   // Media Display
   mediaDisplayMode: "auto" | "indicator" | "ascii" | "kitty" | "iterm2" | "sixel" | "http"
@@ -75,6 +76,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   spellCheck: false,
   autoDownloadMedia: "wifi",
   mediaQuality: "medium",
+  confirmDeleteMessage: true,
   
   mediaDisplayMode: "auto",
   showMediaThumbnails: true,
@@ -171,8 +173,9 @@ export function setNestedSetting(key: string, value: any): void {
 export interface SettingItem {
   id: string
   label: string
-  type: "toggle" | "radio" | "select" | "button" | "number" | "header"
+  type: "toggle" | "radio" | "select" | "button" | "number" | "header" | "keybinding"
   key?: keyof AppSettings | string // Allow nested keys like "whatsapp.autoMarkAsRead"
+  keybindingKey?: string // For keybinding items, the key in KeyBindings
   options?: { value: string; label: string }[]
   min?: number
   max?: number
@@ -241,6 +244,7 @@ const MAIN_SETTINGS: SettingSection[] = [
         { value: "high", label: "High" },
       ]},
       { id: "autoDownloadMediaOnEnter", label: "Auto-download Media on Chat Open", type: "toggle", key: "autoDownloadMediaOnEnter" },
+      { id: "confirmDeleteMessage", label: "Confirm Before Deleting Messages", type: "toggle", key: "confirmDeleteMessage" },
     ]
   },
   {
@@ -296,9 +300,45 @@ const SLACK_SETTINGS: SettingSection[] = [
   },
 ]
 
+// Keybindings settings (dynamically generated)
+// Only includes configurable keybindings - navigation/selection keys are constant
+export function getKeybindingsSettings(): SettingSection[] {
+  return [
+    {
+      title: "🌐 Global",
+      items: [
+        { id: "kb.quit", label: "Quit", type: "keybinding", keybindingKey: "quit" },
+        { id: "kb.settings", label: "Settings", type: "keybinding", keybindingKey: "settings" },
+        { id: "kb.help", label: "Help", type: "keybinding", keybindingKey: "help" },
+      ]
+    },
+    {
+      title: "💬 Chat List",
+      items: [
+        { id: "kb.refreshChats", label: "Refresh Chats", type: "keybinding", keybindingKey: "refreshChats" },
+        { id: "kb.pinChat", label: "Pin/Unpin Chat", type: "keybinding", keybindingKey: "pinChat" },
+        { id: "kb.muteChat", label: "Mute/Unmute Chat", type: "keybinding", keybindingKey: "muteChat" },
+        { id: "kb.archiveChat", label: "Archive Chat", type: "keybinding", keybindingKey: "archiveChat" },
+      ]
+    },
+    {
+      title: "📨 Message Actions",
+      items: [
+        { id: "kb.jumpToReply", label: "Jump to Reply", type: "keybinding", keybindingKey: "jumpToReply" },
+        { id: "kb.setReplyReference", label: "Reply to Message", type: "keybinding", keybindingKey: "setReplyReference" },
+        { id: "kb.openMedia", label: "Open Media", type: "keybinding", keybindingKey: "openMedia" },
+        { id: "kb.deleteMessageForMe", label: "Delete for Me", type: "keybinding", keybindingKey: "deleteMessageForMe" },
+        { id: "kb.deleteMessageForEveryone", label: "Delete for Everyone", type: "keybinding", keybindingKey: "deleteMessageForEveryone" },
+        { id: "kb.editMessage", label: "Edit Message", type: "keybinding", keybindingKey: "editMessage" },
+      ]
+    },
+  ]
+}
+
 // All settings pages
 export const SETTINGS_PAGES: SettingsPage[] = [
-  { id: "main", title: "Main Settings", sections: MAIN_SETTINGS },
+  { id: "main", title: "Main", sections: MAIN_SETTINGS },
+  { id: "keybindings", title: "Keybindings", sections: [] }, // Sections generated dynamically
   { id: "whatsapp", title: "WhatsApp", sections: WHATSAPP_SETTINGS },
   { id: "slack", title: "Slack", sections: SLACK_SETTINGS },
 ]

@@ -48,6 +48,7 @@ export interface MessageData {
   isStarred?: boolean
   hasQuotedMsg?: boolean
   quotedMsgBody?: string
+  quotedMsgId?: string
   media?: MediaAttachment
 }
 
@@ -68,10 +69,16 @@ class WhatsAppService extends EventEmitter {
   constructor() {
     super()
     logger.info("WhatsApp", "Creating WhatsApp client")
+    const execPath = process.env.PUPPETEER_EXECUTABLE_PATH || undefined
+    logger.info("WhatsApp", "Puppeteer config", { 
+      executablePath: execPath,
+      hasEnvVar: !!process.env.PUPPETEER_EXECUTABLE_PATH 
+    })
     this.client = new Client({
       authStrategy: new LocalAuth(),
       puppeteer: {
         headless: true,
+        executablePath: execPath,
         args: [
           "--no-sandbox",
           "--disable-setuid-sandbox",
@@ -228,7 +235,11 @@ class WhatsAppService extends EventEmitter {
       
       logger.info("WhatsApp", "Calling client.initialize()")
       this.client.initialize().catch((err) => {
-        logger.error("WhatsApp", "client.initialize() threw error", err)
+        logger.error("WhatsApp", "client.initialize() threw error", { 
+          message: err.message, 
+          stack: err.stack,
+          name: err.name 
+        })
         reject(err)
       })
     })
@@ -589,6 +600,22 @@ class WhatsAppService extends EventEmitter {
       })
     }
     
+    // Debug quoted message extraction
+    if (msgAny.hasQuotedMsg) {
+      logger.info("WhatsApp", "Message has quoted msg", {
+        hasQuotedMsg: msgAny.hasQuotedMsg,
+        quotedMsgData: !!msgAny._data?.quotedMsg,
+        quotedMsgId_path1: msgAny._data?.quotedMsg?.id?._serialized,
+        quotedMsgId_path2: msgAny._data?.quotedStanzaID,
+        quotedMsgBody: msgAny._data?.quotedMsg?.body?.slice(0, 30),
+      })
+    }
+    
+    // Try multiple paths for quotedMsgId since WhatsApp structure varies
+    const quotedMsgId = msgAny._data?.quotedMsg?.id?._serialized || 
+                        msgAny._data?.quotedStanzaID ||
+                        msgAny.quotedMsgId
+    
     return {
       id: message.id._serialized,
       body: message.body || "",
@@ -603,6 +630,7 @@ class WhatsAppService extends EventEmitter {
       isStarred: msgAny.isStarred || false,
       hasQuotedMsg: msgAny.hasQuotedMsg || false,
       quotedMsgBody: msgAny._data?.quotedMsg?.body,
+      quotedMsgId: quotedMsgId,
       media,
     }
   }
@@ -704,6 +732,7 @@ class WhatsAppService extends EventEmitter {
         authStrategy: new LocalAuth(),
         puppeteer: {
           headless: true,
+          executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
           args: [
             "--no-sandbox",
             "--disable-setuid-sandbox",
