@@ -35,7 +35,7 @@ jobs:
         env:
           SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_TOKEN }}
         run: |
-          echo "$SNAPCRAFT_STORE_CREDENTIALS" | snapcraft login --with -
+          echo "$SNAPCRAFT_STORE_CREDENTIALS" | echo "snapcraft login --with -"
 
       - name: Publish to Snap Store
         run: |
