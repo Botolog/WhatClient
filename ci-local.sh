@@ -87,9 +87,9 @@ echo ""
 echo "Cleaning previous builds..."
 rm -rf parts/ prime/ stage/ *.snap
 
-# Build snap with destructive mode (no LXD needed)
-echo "Building snap package with destructive mode (this may take several minutes)..."
-snapcraft pack --destructive-mode
+# Build snap with lxd
+echo "Building snap package with lxd (this may take several minutes)..."
+snapcraft --use-lxd
 
 SNAP_FILE=$(ls chitchat_*.snap 2>/dev/null || echo "")
 if [ -z "$SNAP_FILE" ]; then
