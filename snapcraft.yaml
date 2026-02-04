@@ -1,0 +1,21 @@
+name: chatter       # must be registered in Snap Store
+version: '0.0.1a'
+summary: MultiService Chat tui
+description: |
+  supports whats app (more coming soon!)
+
+confinement: strict        # or "classic" if needed (classic requires store approval)
+grade: stable
+
+apps:
+  myapp:
+    command: bin/your-executable   # path inside snap
+    plugs: [network]               # add needed interfaces
+
+parts:
+  myapp-part:
+    plugin: dump                   # or "make", "python", "nodejs", etc.
+    source: .
+    organize:
+      path/to/built/binary: bin/your-executable
+    build-packages: [build-essential] # if building native code
