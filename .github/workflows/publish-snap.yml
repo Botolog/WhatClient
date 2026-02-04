@@ -46,5 +46,7 @@ jobs:
           echo "✓ Successfully published to $CHANNEL!"
 
       - name: Get snap info
+        env:
+          SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_TOKEN }}
         run: |
           snapcraft status chitchat
