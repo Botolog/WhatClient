@@ -32,9 +32,11 @@ jobs:
           path: build/
         continue-on-error: true
 
-      - name: Install snapcraft
+      - name: Install snapcraft and dependencies
         run: |
           sudo snap install snapcraft --classic
+          sudo snap install core22
+          sudo snap refresh core22
 
       - name: Build snap package
         id: build-snap

@@ -38,6 +38,12 @@ if ! command -v snapcraft &> /dev/null; then
 fi
 echo -e "${GREEN}✓ Snapcraft installed${NC}"
 
+# Install core22 base snap
+echo "Installing core22 base snap..."
+sudo snap install core22 2>/dev/null || true
+sudo snap refresh core22 2>/dev/null || true
+echo -e "${GREEN}✓ Core22 base available${NC}"
+
 echo -e "${GREEN}✓ No LXD required (using destructive mode)${NC}"
 
 echo ""
