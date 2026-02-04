@@ -1,0 +1,25 @@
+name: Build and publish snap
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install snapcraft
+        run: sudo snap install snapcraft --classic
+
+      - name: Build snap
+        run: |
+          mkdir -p build
+          snapcraft --destructive-mode --output-file=build/${{ github.repository }}.snap
+
+      - name: Upload and release to Snap Store
+        env:
+          SNAPCRAFT_TOKEN: ${{ secrets.SNAPCRAFT_TOKEN }}
+        run: |
+          snapcraft upload build/*.snap --release=stable
