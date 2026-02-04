@@ -20,8 +20,8 @@ website: https://github.com/Botolog/ChitChat
 issues: https://github.com/Botolog/ChitChat/issues
 source-code: https://github.com/Botolog/ChitChat
 
-confinement: strict
-grade: stable
+confinement: devmode
+grade: devel
 
 architectures:
   - build-on: amd64
@@ -29,7 +29,7 @@ architectures:
 
 apps:
   chitchat:
-    command: bin/chitchat
+    command: bin/sh -c 'cd $SNAP_USER_COMMON && exec $SNAP/.bun/bin/bun run $SNAP/app/src/index.ts "$@"'
     plugs:
       - network
       - network-bind
@@ -41,6 +41,9 @@ apps:
       CHITCHAT_DATA_DIR: $SNAP_USER_COMMON
       NODE_PATH: $SNAP/app/node_modules
       PUPPETEER_CACHE_DIR: $SNAP_USER_COMMON/.cache/puppeteer
+      PUPPETEER_SKIP_CHROMIUM_DOWNLOAD: "true"
+      PUPPETEER_EXECUTABLE_PATH: $SNAP/chromium/chrome-linux/chrome
+      LD_LIBRARY_PATH: $SNAP/usr/lib/x86_64-linux-gnu:$SNAP/lib/x86_64-linux-gnu:$SNAP/usr/lib:$SNAP/lib:$LD_LIBRARY_PATH
 
 parts:
   bun:
@@ -59,35 +62,56 @@ parts:
     plugin: nil
     source: .
     after: [bun]
+    build-attributes:
+      - enable-patchelf
+      - no-linter
     build-packages:
       - curl
       - git
+      - unzip
     stage-packages:
       - ca-certificates
       - fonts-liberation
+      - fonts-noto-color-emoji
       - libasound2
       - libatk-bridge2.0-0
       - libatk1.0-0
       - libatspi2.0-0
+      - libavahi-client3
+      - libavahi-common3
       - libc6
       - libcairo2
       - libcups2
+      - libdatrie1
       - libdbus-1-3
       - libdrm2
       - libexpat1
+      - libfontconfig1
+      - libfribidi0
       - libgbm1
       - libglib2.0-0
+      - libgraphite2-3
+      - libharfbuzz0b
       - libnspr4
       - libnss3
       - libpango-1.0-0
+      - libpixman-1-0
+      - libthai0
       - libx11-6
+      - libxau6
       - libxcb1
+      - libxcb-render0
+      - libxcb-shm0
       - libxcomposite1
       - libxdamage1
+      - libxdmcp6
       - libxext6
       - libxfixes3
+      - libxi6
       - libxkbcommon0
       - libxrandr2
+      - libxrender1
+      - libxshmfence1
     override-build: |
       # Set up Bun in PATH
       export PATH="$CRAFT_STAGE/.bun/bin:$PATH"
@@ -95,24 +119,39 @@ parts:
       # Install dependencies
       bun install --frozen-lockfile
       
+      # Download Chromium for Puppeteer
+      echo "Downloading Chromium for Puppeteer..."
+      CHROMIUM_VERSION="131.0.6778.204"
+      CHROMIUM_URL="https://storage.googleapis.com/chromium-browser-snapshots/Linux_x64/1368524/chrome-linux.zip"
+      
+      mkdir -p $CRAFT_PART_INSTALL/chromium
+      curl -L -o /tmp/chromium.zip "$CHROMIUM_URL"
+      unzip -q /tmp/chromium.zip -d $CRAFT_PART_INSTALL/chromium
+      
+      # Make chrome executable
+      chmod +x $CRAFT_PART_INSTALL/chromium/chrome-linux/chrome
+      
+      # Verify chrome binary exists
+      if [ -f "$CRAFT_PART_INSTALL/chromium/chrome-linux/chrome" ]; then
+        echo "Chromium installed successfully at $CRAFT_PART_INSTALL/chromium/chrome-linux/chrome"
+        ls -lh $CRAFT_PART_INSTALL/chromium/chrome-linux/chrome
+      else
+        echo "ERROR: Chromium binary not found!"
+        exit 1
+      fi
+      
+      # Verify libnss3 is staged
+      echo "Checking for libnss3.so..."
+      find $CRAFT_PART_INSTALL -name "libnss3.so*" -ls || echo "WARNING: libnss3.so not found in staged files"
+      
+      rm /tmp/chromium.zip
+      
       # Copy source files and node_modules to app directory
       mkdir -p $CRAFT_PART_INSTALL/app
       cp -r $CRAFT_PART_SRC/src $CRAFT_PART_INSTALL/app/
       cp -r $CRAFT_PART_SRC/node_modules $CRAFT_PART_INSTALL/app/
       cp $CRAFT_PART_SRC/package.json $CRAFT_PART_INSTALL/app/ || echo "Warning: package.json not copied"
-      
-      # Create wrapper script to run with Bun runtime
-      mkdir -p $CRAFT_PART_INSTALL/bin
-      cat > $CRAFT_PART_INSTALL/bin/chitchat << 'EOF'
-      #!/bin/bash
-      # Ensure writable data directory exists
-      mkdir -p "$SNAP_USER_COMMON"
-      # Change to writable directory so process.cwd() points to writable location
-      cd "$SNAP_USER_COMMON"
-      # Run from snap app directory but with CWD in writable location
-      exec "$SNAP/.bun/bin/bun" run "$SNAP/app/src/index.ts" "$@"
-      EOF
-      chmod +x $CRAFT_PART_INSTALL/bin/chitchat
+
     stage:
       - app/
       - bin/chitchat
