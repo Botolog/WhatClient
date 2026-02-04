@@ -31,13 +31,13 @@ jobs:
         with:
           name: snap-package
 
-      - name: Login to Snap Store
-        env:
-          SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_TOKEN }}
-        run: |
-          echo "$SNAPCRAFT_STORE_CREDENTIALS" | echo "snapcraft login --with -"
+      # - name: Login to Snap Store
+      #   run: |
+      #     echo "$SNAPCRAFT_STORE_CREDENTIALS" | echo "snapcraft login --with -"
 
       - name: Publish to Snap Store
+        env:
+          SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_TOKEN }}
         run: |
           SNAP_FILE="${{ inputs.snap-filename }}"
           CHANNEL="${{ inputs.channel }}"
