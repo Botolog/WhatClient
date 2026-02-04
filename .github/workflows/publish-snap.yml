@@ -10,8 +10,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install snapcraft
-        run: sudo snap install snapcraft --classic
+      - name: Install snapcraft with retries
+        run: |
+          for i in 1 2 3; do
+            sudo snap install snapcraft --classic && break || sleep 10
+          done
 
       - name: Build snap
         run: |
