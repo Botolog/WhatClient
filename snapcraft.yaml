@@ -36,6 +36,7 @@ apps:
       - home
     environment:
       HOME: $SNAP_USER_COMMON
+      TMPDIR: $SNAP_USER_COMMON/tmp
 
 parts:
   bun:
@@ -64,14 +65,20 @@ parts:
       # Install dependencies
       bun install --frozen-lockfile
       
-      # Build the application
-      bun build src/index.ts \
-        --compile \
-        --minify \
-        --target=bun \
-        --outfile $CRAFT_PART_INSTALL/bin/chitchat
+      # Copy source files and node_modules to app directory
+      mkdir -p $CRAFT_PART_INSTALL/app
+      cp -r $CRAFT_PART_SRC/src $CRAFT_PART_INSTALL/app/
+      cp -r $CRAFT_PART_SRC/node_modules $CRAFT_PART_INSTALL/app/
+      cp $CRAFT_PART_SRC/package.json $CRAFT_PART_INSTALL/app/ || echo "Warning: package.json not copied"
       
-      # Make executable
+      # Create wrapper script to run with Bun runtime
+      mkdir -p $CRAFT_PART_INSTALL/bin
+      cat > $CRAFT_PART_INSTALL/bin/chitchat << 'EOF'
+      #!/bin/bash
+      cd "$SNAP/app"
+      exec "$SNAP/.bun/bin/bun" run src/index.ts "$@"
+      EOF
       chmod +x $CRAFT_PART_INSTALL/bin/chitchat
     stage:
+      - app/
       - bin/chitchat

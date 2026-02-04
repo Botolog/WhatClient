@@ -85,8 +85,7 @@ echo ""
 
 # Clean previous snap builds
 echo "Cleaning previous builds..."
-snapcraft clean || true
-rm -f *.snap
+rm -rf parts/ prime/ stage/ *.snap
 
 # Build snap with destructive mode (no LXD needed)
 echo "Building snap package with destructive mode (this may take several minutes)..."
