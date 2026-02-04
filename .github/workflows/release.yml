@@ -1,0 +1,32 @@
+name: Release Pipeline
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: "Snap Store channel"
+        required: false
+        type: choice
+        options:
+          - stable
+          - candidate
+          - beta
+          - edge
+        default: "stable"
+
+jobs:
+  build:
+    name: Build Snap Package
+    uses: ./.github/workflows/build-snap.yml
+
+  publish:
+    name: Publish to Snap Store
+    needs: build
+    uses: ./.github/workflows/publish-snap.yml
+    with:
+      snap-filename: ${{ needs.build.outputs.snap-filename }}
+      channel: ${{ inputs.channel || 'stable' }}
+    secrets:
+      SNAPCRAFT_TOKEN: ${{ secrets.SNAPCRAFT_TOKEN }}

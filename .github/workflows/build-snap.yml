@@ -1,0 +1,54 @@
+name: Build Snap Package
+
+on:
+  push:
+    branches: [ main, dev ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+  workflow_call:
+    outputs:
+      snap-filename:
+        description: "The filename of the built snap"
+        value: ${{ jobs.build.outputs.snap-filename }}
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    outputs:
+      snap-filename: ${{ steps.build-snap.outputs.snap-filename }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install snapcraft and LXD
+        run: |
+          sudo snap install snapcraft --classic
+          sudo snap install lxd
+          sudo lxd init --auto
+          sudo usermod -a -G lxd $USER
+          sudo chown root:lxd /var/snap/lxd/common/lxd/unix.socket
+          sudo chmod g+rw /var/snap/lxd/common/lxd/unix.socket
+
+      - name: Build snap package
+        id: build-snap
+        run: |
+          sg lxd -c 'snapcraft pack'
+          SNAP_FILE=$(ls chitchat_*.snap)
+          echo "snap-filename=$SNAP_FILE" >> $GITHUB_OUTPUT
+          echo "Built snap: $SNAP_FILE"
+
+      - name: Upload snap artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: snap-package
+          path: chitchat_*.snap
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Display snap info
+        run: |
+          sudo snap install --dangerous chitchat_*.snap
+          snap info chitchat
+          sudo snap remove chitchat

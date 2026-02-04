@@ -1,32 +1,50 @@
-name: Build and publish snap
+name: Publish Snap to Store
+
 on:
-  push:
-    branches: [ main ]
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      snap-filename:
+        description: "Name of the snap file to publish"
+        required: false
+        type: string
+        default: "chitchat_*.snap"
+      channel:
+        description: "Snap Store channel to publish to"
+        required: false
+        type: string
+        default: "stable"
+    secrets:
+      SNAPCRAFT_TOKEN:
+        required: true
 
 jobs:
-  build-and-release:
+  publish:
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
-
       - name: Install snapcraft
         run: |
           sudo snap install snapcraft --classic
-          sudo snap install lxd
-          sudo lxd init --auto
-          sudo usermod -a -G lxd $USER
-          sudo chown root:lxd /var/snap/lxd/common/lxd/unix.socket
-          sudo chmod g+rw /var/snap/lxd/common/lxd/unix.socket
 
-      - name: Build snap
-        run: |
-          sg lxd -c 'snapcraft pack'
+      - name: Download snap artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: snap-package
 
-      - name: Upload and release to Snap Store
-        if: github.ref == 'refs/heads/main'
+      - name: Login to Snap Store
         env:
           SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_TOKEN }}
         run: |
           echo "$SNAPCRAFT_STORE_CREDENTIALS" | snapcraft login --with -
-          snapcraft upload --release=stable chitchat_*.snap
+
+      - name: Publish to Snap Store
+        run: |
+          SNAP_FILE="${{ inputs.snap-filename }}"
+          CHANNEL="${{ inputs.channel }}"
+          echo "Publishing $SNAP_FILE to $CHANNEL channel..."
+          snapcraft upload --release=$CHANNEL $SNAP_FILE
+          echo "✓ Successfully published to $CHANNEL!"
+
+      - name: Get snap info
+        run: |
+          snapcraft status chitchat
