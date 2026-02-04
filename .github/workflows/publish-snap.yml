@@ -15,10 +15,13 @@ jobs:
           sudo snap install snapcraft --classic
           sudo snap install lxd
           sudo lxd init --auto
+          sudo usermod -a -G lxd $USER
+          sudo chown root:lxd /var/snap/lxd/common/lxd/unix.socket
+          sudo chmod g+rw /var/snap/lxd/common/lxd/unix.socket
 
       - name: Build snap
         run: |
-          snapcraft --use-lxd
+          sg lxd -c 'snapcraft pack'
 
       - name: Upload and release to Snap Store
         if: github.ref == 'refs/heads/main'
