@@ -8,38 +8,28 @@ import {
   type KeyEvent 
 } from "@opentui/core"
 import { logger } from "./utils/logger"
+import { loadSettings, saveSettings, getSettings, updateSetting, SETTINGS_MENU, SETTINGS_PAGES, getNestedSetting, setNestedSetting, type AppSettings, type SettingSection, type SettingsPage } from "./settings"
+import { SERVICES, getServiceTheme, getEnabledServices, type ServiceConfig, type ServiceTheme } from "./services/registry"
+import { createMainMenuState, renderMainMenu, navigateMenu, getSelectedService, renderGlobalSettings, type MainMenuState } from "./ui/mainMenu"
+import { detectTerminalCapabilities, getOptimalDisplayMode, type MediaDisplayMode } from "./utils/terminalCapabilities"
+import { MediaRenderer } from "./utils/mediaRenderer"
+import type { MessageData, MediaAttachment, ChatData } from "./services/whatsapp"
+import { mediaCache } from "./utils/mediaCache"
 
 const DEMO_MODE = process.argv.includes("--demo")
-logger.init()
-logger.info("App", "Starting WhatsApp TUI", { demoMode: DEMO_MODE, args: process.argv })
+logger.info("App", "Starting ChatClient", { demoMode: DEMO_MODE, args: process.argv })
 
-interface ChatData {
-  id: string
-  name: string
-  isGroup: boolean
-  unreadCount: number
-  pinned: boolean
-  muted: boolean
-  archived: boolean
-  participantCount?: number
-  lastMessage?: { body: string; timestamp: number; fromMe: boolean }
-}
+// App view state
+type AppView = "main_menu" | "global_settings" | "service"
+let currentView: AppView = "main_menu"
+let currentServiceId: string | null = null
+let mainMenuState: MainMenuState = createMainMenuState()
+let globalSettingsItem = 0
 
-interface MessageData {
-  id: string
-  body: string
-  timestamp: number
-  fromMe: boolean
-  author?: string
-  hasMedia: boolean
-  type: string
-  ack?: number
-  isForwarded?: boolean
-  forwardingScore?: number
-  isStarred?: boolean
-  hasQuotedMsg?: boolean
-  quotedMsgBody?: string
-}
+// Initialize media renderer
+const termCapabilities = detectTerminalCapabilities()
+logger.info("App", "Terminal capabilities", termCapabilities)
+let mediaRenderer: MediaRenderer | null = null
 
 const DEMO_CHATS: ChatData[] = [
   { id: "1", name: "John Doe", isGroup: false, unreadCount: 2, pinned: true, muted: false, archived: false, lastMessage: { body: "Hey, how are you?", timestamp: Date.now() / 1000, fromMe: false } },
@@ -84,17 +74,44 @@ const DEMO_MESSAGES: Record<string, MessageData[]> = {
   ],
 }
 
-const colors = {
-  bg: "#111B21",
-  surface: "#1F2C34",
-  surfaceLight: "#2A3942",
-  border: "#2A3942",
-  primary: "#25D366",
-  text: "#E9EDEF",
-  textMuted: "#8696A0",
-  sent: "#005C4B",
-  received: "#1F2C34",
+// Dynamic colors based on current service (default to WhatsApp)
+let colors: ServiceTheme = getServiceTheme("whatsapp")
+
+function setServiceTheme(serviceId: string) {
+  colors = getServiceTheme(serviceId)
+  currentServiceId = serviceId
+  logger.info("App", "Theme changed", { serviceId, primary: colors.primary })
 }
+
+// Cleanup function to restore terminal on exit
+let cleanupDone = false
+function cleanupTerminal() {
+  if (cleanupDone) return
+  cleanupDone = true
+  
+  // Disable all mouse tracking modes
+  process.stdout.write('\x1b[?1000l') // X11 mouse tracking
+  process.stdout.write('\x1b[?1002l') // Button event tracking  
+  process.stdout.write('\x1b[?1003l') // Any event tracking
+  process.stdout.write('\x1b[?1006l') // SGR mouse mode
+  process.stdout.write('\x1b[?1015l') // urxvt mouse mode
+  process.stdout.write('\x1b[?1005l') // UTF-8 mouse mode
+  
+  // Restore cursor and clear
+  process.stdout.write('\x1b[?25h') // Show cursor
+  process.stdout.write('\x1b[0m')   // Reset colors
+  process.stdout.write('\x1b[2J\x1b[H') // Clear screen
+}
+
+// Register cleanup handlers
+process.on('exit', cleanupTerminal)
+process.on('SIGINT', () => { cleanupTerminal(); process.exit(0) })
+process.on('SIGTERM', () => { cleanupTerminal(); process.exit(0) })
+process.on('uncaughtException', (err) => { 
+  cleanupTerminal()
+  console.error('Uncaught exception:', err)
+  process.exit(1)
+})
 
 async function main() {
   logger.info("App", "main() starting")
@@ -105,21 +122,16 @@ async function main() {
 
   let width = process.stdout.columns || 80
   let height = process.stdout.rows || 24
-  const chatListWidth = 32
+  let chatListWidth = 32
   let msgAreaWidth = width - chatListWidth - 2
   logger.debug("App", "Terminal dimensions", { width, height, chatListWidth, msgAreaWidth })
 
   // Handle terminal resize - update dimensions and re-render
-  function handleResize() {
-    const newWidth = process.stdout.columns || 80
-    const newHeight = process.stdout.rows || 24
+  async function handleResize() {
+    logger.debug("App", "Resize detected", { width, height })
     
-    if (newWidth === width && newHeight === height) {
-      return // No actual change
-    }
-    
-    width = newWidth
-    height = newHeight
+    // Update global dimensions
+    chatListWidth = Math.floor(width * 0.15)
     msgAreaWidth = width - chatListWidth - 2
     logger.info("App", "Terminal resized - updating UI", { width, height, msgAreaWidth })
     
@@ -128,7 +140,37 @@ async function main() {
     mainBox.height = height
     rightPanel.width = msgAreaWidth
     rightPanel.height = height - 2
+    chatListLeftBorder.height = height - 2
     chatListBox.height = height - 2
+    messagesRightBorder.height = height - 2
+    
+    // Update left border 'l' characters for new height
+    // Remove old border characters and recreate
+    for (let i = 0; i < 100; i++) { // Remove up to 100 old characters
+      chatListLeftBorder.remove(`chat-border-l-${i}`)
+    }
+    for (let i = 0; i < height - 2; i++) {
+      const borderChar = new TextRenderable(renderer, {
+        id: `chat-border-l-${i}`,
+        content: "l",
+        fg: colors.border,
+      })
+      chatListLeftBorder.add(borderChar)
+    }
+    
+    // Update right border 'l' characters for new height
+    for (let i = 0; i < 100; i++) { // Remove up to 100 old characters
+      messagesRightBorder.remove(`messages-border-l-${i}`)
+    }
+    for (let i = 0; i < height - 2; i++) {
+      const borderChar = new TextRenderable(renderer, {
+        id: `messages-border-l-${i}`,
+        content: "l",
+        fg: colors.border,
+      })
+      messagesRightBorder.add(borderChar)
+    }
+    
     messagesScroll.width = msgAreaWidth
     messagesScroll.height = height - 8
     statusBar.width = width
@@ -139,13 +181,34 @@ async function main() {
     messageInput.width = msgAreaWidth - 8
     chatHeader.width = msgAreaWidth
     
-    // Re-render chats and messages with new dimensions
-    if (chats.length > 0) {
-      renderChats()
-      updateSelection()
+    // Update menu dimensions
+    if (menuBox) {
+      menuBox.width = width
+      menuBox.height = height
     }
-    if (messages.length > 0) {
-      renderMessages()
+    
+    // Update settings dimensions
+    if (settingsBox) {
+      settingsBox.width = width
+      settingsBox.height = height
+    }
+    
+    // Re-render based on current view
+    if (currentView === "main_menu") {
+      // Menu will auto-update with new dimensions
+    } else if (currentView === "service") {
+      if (chats.length > 0) {
+        renderChats()
+        updateSelection()
+      }
+      if (messages.length > 0) {
+        await renderMessages()
+      }
+    }
+    
+    // Rebuild settings if open
+    if (showSettings) {
+      buildSettingsItems()
     }
     
     logger.debug("App", "Resize complete - UI updated")
@@ -156,18 +219,31 @@ async function main() {
   let chats: ChatData[] = DEMO_MODE ? DEMO_CHATS : []
   let messages: MessageData[] = []
   let selectedChat = 0
+  let selectedMessage = -1 // -1 means hidden, >=0 shows cursor
   let currentChatId: string | null = null
-  let focusArea: "chats" | "input" = "chats"
+  let focusArea: "chats" | "input" | "settings" | "messages" | "editing" = "chats"
   let isReady = DEMO_MODE
+  let replyToMessageId: string | null = null // Message to reply to
+  let editingMessageId: string | null = null // Message being edited
+  
+  // Settings state
+  let showSettings = false
+  let settingsSection = 0
+  let settingsItem = 0
+  let currentSettingsPage = 0 // Track which settings page (Main, WhatsApp, Slack)
+  const settings = loadSettings()
 
-  // Conditionally import WhatsApp
-  let whatsapp: any = null
-  if (!DEMO_MODE) {
-    logger.info("App", "Importing WhatsApp service")
-    const wa = await import("./services/whatsapp")
-    whatsapp = wa.whatsapp
-    logger.info("App", "WhatsApp service imported")
-  }
+  // Placeholder functions - will be defined after UI components are created
+  let showMainMenu: () => void
+  let showServiceView: () => void
+  let showGlobalSettingsView: () => void
+  let enterService: (serviceId: string) => void
+  let exitToMainMenu: () => void
+
+  // Service manager for multi-service support
+  const { getServiceInstance, destroyAllServices } = await import("./services/index")
+  let activeService: any = null
+  let activeServiceId: string | null = null
 
   // Main container
   const mainBox = new BoxRenderable(renderer, {
@@ -205,6 +281,25 @@ async function main() {
     flexDirection: "row",
   })
 
+  // Custom left border for chat list (made of 'l' characters)
+  const chatListLeftBorder = new BoxRenderable(renderer, {
+    id: "chat-list-left-border",
+    width: 1,
+    height: height - 2,
+    backgroundColor: colors.bg,
+    flexDirection: "column",
+  })
+  
+  // Fill with 'l' characters
+  for (let i = 0; i < height - 2; i++) {
+    const borderChar = new TextRenderable(renderer, {
+      id: `chat-border-l-${i}`,
+      content: "l",
+      fg: "#00000000",
+    })
+    chatListLeftBorder.add(borderChar)
+  }
+
   // Chat list
   const chatListBox = new BoxRenderable(renderer, {
     id: "chat-list",
@@ -218,6 +313,25 @@ async function main() {
     flexDirection: "column",
     padding: 1,
   })
+  
+  // Custom right border for messages area (made of 'l' characters)
+  const messagesRightBorder = new BoxRenderable(renderer, {
+    id: "messages-right-border",
+    width: 1,
+    height: height - 2,
+    backgroundColor: colors.bg,
+    flexDirection: "column",
+  })
+  
+  // Fill with 'l' characters
+  for (let i = 0; i < height - 2; i++) {
+    const borderChar = new TextRenderable(renderer, {
+      id: `messages-border-l-${i}`,
+      content: "l",
+      fg: "#00000000",
+    })
+    messagesRightBorder.add(borderChar)
+  }
   
   // Function to update chat list title with count
   function updateChatListTitle() {
@@ -361,21 +475,424 @@ async function main() {
   })
   const helpText = new TextRenderable(renderer, {
     id: "help-text",
-    content: "?:Help │ ↑↓:Nav │ Ctrl+P:Pin │ Ctrl+M:Mute │ Ctrl+A:Archive │ Ctrl+R:Refresh │ Ctrl+Q:Quit",
+    content: "?:Help │ F2:Settings │ ↑↓:Nav │ Ctrl+P:Pin │ Ctrl+M:Mute │ Ctrl+A:Archive │ Ctrl+R:Refresh │ Ctrl+Q:Quit",
     fg: colors.textMuted,
   })
   statusBar.add(statusText)
   statusBar.add(helpText)
 
   // Build tree
+  contentRow.add(chatListLeftBorder)
   contentRow.add(chatListBox)
+  contentRow.add(messagesRightBorder)
   contentRow.add(rightPanel)
   mainBox.add(titleBar)
   mainBox.add(contentRow)
   mainBox.add(statusBar)
   renderer.root.add(mainBox)
 
-  const chatItems: { box: BoxRenderable; nameText: TextRenderable }[] = []
+  // ========== MAIN MENU (OpenTUI components) ==========
+  const menuBox = new BoxRenderable(renderer, {
+    id: "menu-box",
+    width: width,
+    height: height,
+    backgroundColor: "#0D1117",
+    flexDirection: "column",
+    alignItems: "center",
+    justifyContent: "center",
+  })
+
+  const menuTitle = new TextRenderable(renderer, {
+    id: "menu-title",
+    content: "═══════════════════════════════════════",
+    fg: "#58A6FF",
+  })
+  
+  const menuLogo = new TextRenderable(renderer, {
+    id: "menu-logo", 
+    content: "💬 ChatClient",
+    fg: "#FFFFFF",
+  })
+  
+  const menuSubtitle = new TextRenderable(renderer, {
+    id: "menu-subtitle",
+    content: "Universal Messaging Client v1.0",
+    fg: "#8B949E",
+  })
+
+  const menuSpacer = new TextRenderable(renderer, {
+    id: "menu-spacer",
+    content: " ",
+    fg: "#8B949E",
+  })
+
+  const menuInstructions = new TextRenderable(renderer, {
+    id: "menu-instructions",
+    content: "Select a service:",
+    fg: "#C9D1D9",
+  })
+
+  // Service menu items (use BoxRenderable for background color support)
+  const menuItemBoxes: { box: BoxRenderable; text: TextRenderable }[] = []
+  const services = getEnabledServices()
+  
+  for (let i = 0; i < services.length; i++) {
+    const svc = services[i]
+    const itemBox = new BoxRenderable(renderer, {
+      id: `menu-item-box-${i}`,
+      width: 30,
+      height: 1,
+      backgroundColor: i === 0 ? "#30363D" : "#0D1117",
+      justifyContent: "center",
+    })
+    const itemText = new TextRenderable(renderer, {
+      id: `menu-item-${i}`,
+      content: `${svc.icon}  ${svc.name}`,
+      fg: i === 0 ? "#FFFFFF" : "#8B949E",
+    })
+    itemBox.add(itemText)
+    menuItemBoxes.push({ box: itemBox, text: itemText })
+  }
+
+  const menuFooter = new TextRenderable(renderer, {
+    id: "menu-footer",
+    content: "↑↓ Navigate │ Enter Select │ S Settings │ Q Quit",
+    fg: "#6E7681",
+  })
+
+  // Add all to menu
+  menuBox.add(menuTitle)
+  menuBox.add(menuLogo)
+  menuBox.add(menuSubtitle)
+  menuBox.add(menuSpacer)
+  menuBox.add(menuInstructions)
+  for (const item of menuItemBoxes) {
+    menuBox.add(item.box)
+  }
+  menuBox.add(menuSpacer)
+  menuBox.add(menuFooter)
+
+  renderer.root.add(menuBox)
+  
+  // Start with menu visible, main hidden
+  mainBox.visible = false
+  menuBox.visible = true
+
+  // Menu selection state
+  let menuSelectedIndex = 0
+
+  // ========== SETTINGS VIEW (OpenTUI components) ==========
+  const settingsBox = new BoxRenderable(renderer, {
+    id: "settings-box",
+    width: width,
+    height: height,
+    backgroundColor: "#0D1117",
+    flexDirection: "column",
+    alignItems: "center",
+    justifyContent: "center",
+  })
+
+  const settingsTitle = new TextRenderable(renderer, {
+    id: "settings-title",
+    content: "⚙️  Settings",
+    fg: "#58A6FF",
+  })
+
+  const settingsSpacer = new TextRenderable(renderer, {
+    id: "settings-spacer",
+    content: " ",
+    fg: "#8B949E",
+  })
+
+  // Settings items will be dynamically built - track IDs for removal
+  let settingsItemIds: string[] = []
+  
+  function buildSettingsItems() {
+    // Remove all previously added dynamic items by ID
+    for (const id of settingsItemIds) {
+      settingsBox.remove(id)
+    }
+    settingsItemIds = []
+    
+    // Settings page tabs
+    const currentPage = SETTINGS_PAGES[currentSettingsPage]
+    const pageTabsText = SETTINGS_PAGES.map((p, idx) => 
+      idx === currentSettingsPage ? `[${p.title}]` : p.title
+    ).join("  ")
+    
+    settingsTitle.content = `⚙️ Settings - ${pageTabsText}\n`
+    
+    // Add title
+    settingsBox.add(settingsTitle)
+    settingsBox.add(settingsSpacer)
+    
+    // Build items from current settings page
+    currentPage.sections.forEach((section, sIdx) => {
+      // Section header
+      const headerId = `settings-section-${sIdx}`
+      const sectionHeader = new TextRenderable(renderer, {
+        id: headerId,
+        content: section.title,
+        fg: "#8B949E",
+      })
+      settingsBox.add(sectionHeader)
+      settingsItemIds.push(headerId)
+      
+      section.items.forEach((menuItem, iIdx) => {
+        const isSelected = sIdx === settingsSection && iIdx === settingsItem
+        
+        let valueStr = ""
+        if (menuItem.key) {
+          const val = getNestedSetting(menuItem.key)
+          if (menuItem.type === "toggle") {
+            valueStr = val ? " [●]" : " [○]"
+          } else if (menuItem.type === "radio" || menuItem.type === "select") {
+            const opt = menuItem.options?.find(o => o.value === val)
+            valueStr = ` [${opt?.label || val}]`
+          } else if (menuItem.type === "number") {
+            valueStr = ` [${val}]`
+          }
+        } else if (menuItem.type === "button") {
+          valueStr = " →"
+        }
+        
+        const boxId = `settings-item-box-${sIdx}-${iIdx}`
+        const itemBox = new BoxRenderable(renderer, {
+          id: boxId,
+          width: 50,
+          height: 1,
+          backgroundColor: isSelected ? "#30363D" : "#0D1117",
+          justifyContent: "flex-start",
+          paddingLeft: 2,
+        })
+        
+        const itemText = new TextRenderable(renderer, {
+          id: `settings-item-${sIdx}-${iIdx}`,
+          content: `${isSelected ? "▸ " : "  "}${menuItem.label}${valueStr}`,
+          fg: isSelected ? "#FFFFFF" : "#8B949E",
+        })
+        
+        itemBox.add(itemText)
+        settingsBox.add(itemBox)
+        settingsItemIds.push(boxId)
+      })
+      
+      // Add spacer after section
+      const spacerId = `settings-section-spacer-${sIdx}`
+      const sectionSpacer = new TextRenderable(renderer, {
+        id: spacerId,
+        content: " ",
+        fg: "#8B949E",
+      })
+      settingsBox.add(sectionSpacer)
+      settingsItemIds.push(spacerId)
+    })
+    
+    // Footer
+    const footerId = "settings-footer"
+    const settingsFooter = new TextRenderable(renderer, {
+      id: footerId,
+      content: "↑↓ Navigate │ Enter Toggle │ Esc Close",
+      fg: "#6E7681",
+    })
+    settingsBox.add(settingsFooter)
+    settingsItemIds.push(footerId)
+  }
+
+  renderer.root.add(settingsBox)
+  settingsBox.visible = false
+  
+  function updateMenuSelection() {
+    for (let i = 0; i < menuItemBoxes.length; i++) {
+      const isSelected = i === menuSelectedIndex
+      menuItemBoxes[i].box.backgroundColor = isSelected ? "#30363D" : "#0D1117"
+      menuItemBoxes[i].text.fg = isSelected ? "#FFFFFF" : "#8B949E"
+    }
+  }
+
+  // Define view switching functions now that UI components exist
+  showMainMenu = () => {
+    mainBox.visible = false
+    menuBox.visible = true
+    currentView = "main_menu"
+    updateMenuSelection()
+    logger.debug("App", "Showing main menu")
+  }
+
+  showServiceView = () => {
+    menuBox.visible = false
+    mainBox.visible = true
+    logger.debug("App", "Showing service view")
+  }
+
+  showGlobalSettingsView = () => {
+    console.clear()
+    renderGlobalSettings(width, height, globalSettingsItem, (lines) => {
+      const startY = Math.max(1, Math.floor((height - lines.length) / 2))
+      const boxWidth = Math.min(60, width - 4)
+      const startX = Math.max(1, Math.floor((width - boxWidth) / 2))
+      lines.forEach((line, i) => {
+        process.stdout.write(`\x1b[${startY + i};${startX}H${line}`)
+      })
+    })
+  }
+
+  enterService = async (serviceId: string) => {
+    setServiceTheme(serviceId)
+    activeServiceId = serviceId
+    currentView = "service"
+    
+    // Initialize media renderer based on settings
+    const settings = getSettings()
+    const displayMode = settings.mediaDisplayMode === 'auto' 
+      ? getOptimalDisplayMode(termCapabilities)
+      : settings.mediaDisplayMode as MediaDisplayMode
+    mediaRenderer = new MediaRenderer(displayMode)
+    logger.info("App", "Media renderer initialized", { mode: displayMode })
+    
+    // Update all UI component colors
+    mainBox.backgroundColor = colors.bg
+    titleBar.backgroundColor = colors.titleBar
+    chatListBox.borderColor = colors.primary
+    chatListBox.backgroundColor = colors.surface
+    rightPanel.backgroundColor = colors.bg
+    chatHeader.backgroundColor = colors.surface
+    chatHeaderText.fg = colors.text
+    chatHeaderMsgCount.fg = colors.textMuted
+    messagesScroll.backgroundColor = colors.bg
+    inputArea.borderColor = colors.border
+    statusBar.backgroundColor = colors.surface
+    statusText.fg = colors.primary
+    statusText.content = DEMO_MODE ? "● Demo Mode" : "○ Connecting..."
+    helpText.fg = colors.textMuted
+    
+    const service = SERVICES[serviceId]
+    titleText.content = `${service?.icon || "💬"} ${service?.name || serviceId} Client${modeLabel}`
+    
+    showServiceView()
+    mainBox.visible = true
+    renderChats()
+    updateSelection()
+    
+    if (DEMO_MODE) {
+      isReady = true
+      logger.info("App", "Entered service (demo mode)", { serviceId })
+      return
+    }
+    
+    // Load and initialize the service
+    logger.info("App", "Loading service", { serviceId })
+    try {
+      activeService = await getServiceInstance(serviceId)
+      if (!activeService) {
+        statusText.content = `✗ ${service?.name || serviceId} not available`
+        statusText.fg = "#F15C6D"
+        logger.error("App", "Service not available", { serviceId })
+        return
+      }
+      
+      // Setup event handlers for this service
+      setupServiceEventHandlers()
+      
+      // Initialize the service
+      await activeService.initialize()
+      logger.info("App", "Service initialized", { serviceId })
+    } catch (err: any) {
+      logger.error("App", "Service initialization failed", { serviceId, error: err.message })
+      statusText.content = `✗ ${err.message?.slice(0, 30) || "Error"}`
+      statusText.fg = "#F15C6D"
+    }
+  }
+  
+  function setupServiceEventHandlers() {
+    if (!activeService) return
+    
+    // Remove any existing listeners first
+    activeService.removeAllListeners()
+    
+    activeService.on("qr", (qr: string) => {
+      logger.event("App", "qr received")
+      statusText.content = "○ Scan QR..."
+      loadingText.content = "Scan QR code\nin terminal"
+      if (activeService.displayQrCode) {
+        activeService.displayQrCode(qr)
+      }
+    })
+
+    activeService.on("authenticated", () => {
+      logger.event("App", "authenticated")
+      statusText.content = "○ Authenticated..."
+      loadingText.content = "Loading..."
+    })
+
+    activeService.on("ready", async () => {
+      logger.event("App", "ready - service is ready!")
+      isReady = true
+      statusText.content = "○ Loading chats..."
+      
+      try {
+        chats = await activeService.getChats()
+        logger.info("App", "Chats loaded", { count: chats.length })
+        
+        renderChats()
+        updateSelection()
+        loadingText.content = ""
+        statusText.content = "● Connected"
+        statusText.fg = colors.primary
+      } catch (err: any) {
+        logger.error("App", "Error loading chats", err)
+        statusText.content = `✗ ${err.message?.slice(0, 20)}`
+        statusText.fg = "#F15C6D"
+      }
+    })
+
+    activeService.on("message", async () => {
+      logger.event("App", "message received")
+      if (currentChatId) {
+        messages = await activeService.getMessages(currentChatId, 30)
+        await renderMessages()
+        await activeService.markAsRead(currentChatId)
+        const chatIdx = chats.findIndex(c => c.id === currentChatId)
+        if (chatIdx >= 0) {
+          chats[chatIdx].unreadCount = 0
+        }
+      }
+      chats = await activeService.getChats()
+      renderChats()
+      updateSelection()
+    })
+
+    activeService.on("disconnected", (reason: string) => {
+      logger.event("App", "disconnected", { reason })
+      isReady = false
+      statusText.content = `✗ ${reason}`
+      statusText.fg = "#F15C6D"
+    })
+
+    activeService.on("typing", ({ chatId, isTyping }: { chatId: string; isTyping: boolean }) => {
+      if (chatId === currentChatId) {
+        if (isTyping) {
+          chatHeaderMsgCount.content = " typing..."
+          chatHeaderMsgCount.fg = colors.primary
+        } else {
+          chatHeaderMsgCount.content = messages.length > 0 ? ` (${messages.length} messages)` : ""
+          chatHeaderMsgCount.fg = colors.textMuted
+        }
+      }
+    })
+    
+    logger.info("App", "Service event handlers set up")
+  }
+
+  exitToMainMenu = () => {
+    currentView = "main_menu"
+    currentServiceId = null
+    showMainMenu()
+    logger.info("App", "Returned to main menu")
+  }
+
+  const chatItems: { box: BoxRenderable; nameText: TextRenderable; chatIdx: number }[] = []
+  let chatItemIds: string[] = [] // Track IDs for proper removal
 
   function truncate(str: string, len: number): string {
     return str.length <= len ? str : str.slice(0, len - 1) + "…"
@@ -392,11 +909,12 @@ async function main() {
     chatListBox.remove("loading-text")
     logger.debug("RenderChats", "Removed loading text")
     
-    for (let i = 0; i < chatItems.length; i++) {
-      chatListBox.remove(`chat-${i}`)
-      logger.debug("RenderChats", `Removed old chat item ${i}`)
+    // Remove all previously rendered chat items by their actual IDs
+    for (const id of chatItemIds) {
+      chatListBox.remove(id)
     }
     chatItems.length = 0
+    chatItemIds = []
 
     const maxChats = Math.floor((height - 6) / 2) // Calculate based on terminal height
     logger.info("RenderChats", "Calculated maxChats", { maxChats, height })
@@ -409,7 +927,15 @@ async function main() {
       return
     }
     
-    for (let i = 0; i < Math.min(chats.length, maxChats); i++) {
+    // Calculate scroll offset to keep selected chat visible
+    let startIdx = 0
+    if (selectedChat >= maxChats) {
+      startIdx = selectedChat - maxChats + 1
+    }
+    const endIdx = Math.min(chats.length, startIdx + maxChats)
+    
+    for (let i = startIdx; i < endIdx; i++) {
+      const displayIdx = i - startIdx
       logger.debug("RenderChats", `Rendering chat ${i}`, { chatName: chats[i]?.name })
       const chat = chats[i]
       const itemBox = new BoxRenderable(renderer, {
@@ -461,7 +987,8 @@ async function main() {
       itemBox.add(nameText)
       itemBox.add(msgText)
       chatListBox.add(itemBox)
-      chatItems.push({ box: itemBox, nameText })
+      chatItems.push({ box: itemBox, nameText, chatIdx: i })
+      chatItemIds.push(`chat-${i}`)
       logger.debug("RenderChats", `Added chat item ${i} to chatListBox`)
     }
     logger.info("RenderChats", "Finished renderChats()", { renderedCount: chatItems.length })
@@ -473,16 +1000,28 @@ async function main() {
       chatItemsCount: chatItems.length 
     })
     
-    // Always use chatItems - renderChats() handles all chat rendering
     if (chatItems.length === 0) {
       logger.warn("UpdateSelection", "No items to update!")
       return
     }
     
-    for (let i = 0; i < chatItems.length; i++) {
-      chatItems[i].box.backgroundColor = i === selectedChat ? colors.surfaceLight : colors.surface
-      chatItems[i].nameText.fg = i === selectedChat ? colors.primary : colors.text
+    // Check if selected chat is visible in current view
+    const isVisible = chatItems.some(item => item.chatIdx === selectedChat)
+    if (!isVisible) {
+      // Need to re-render to show selected chat
+      renderChats()
+      return
     }
+    
+    // Update visual selection
+    for (let i = 0; i < chatItems.length; i++) {
+      const chatIdx = chatItems[i].chatIdx
+      const isSelected = chatIdx === selectedChat
+      chatItems[i].box.backgroundColor = isSelected ? colors.surfaceLight : colors.surface
+      const hasUnread = chats[chatIdx]?.unreadCount > 0
+      chatItems[i].nameText.fg = isSelected ? colors.primary : (hasUnread ? "#FFFFFF" : colors.text)
+    }
+    
     if (chats[selectedChat]) {
       chatHeaderText.content = chats[selectedChat].name
       logger.debug("UpdateSelection", "Updated header", { chatName: chats[selectedChat].name })
@@ -491,18 +1030,25 @@ async function main() {
   }
 
   let msgCount = 0
-  function renderMessages() {
+  async function renderMessages() {
     logger.info("RenderMessages", "Starting renderMessages()", { 
       messagesCount: messages.length, 
       currentMsgCount: msgCount,
-      currentChatId 
+      currentChatId,
+      selectedMessage
     })
     
+    // Remove old messages
     for (let i = 0; i < msgCount; i++) {
       messagesScroll.remove(`msg-${i}`)
     }
     messagesScroll.remove("empty-msg")
     msgCount = 0
+    // Keep cursor hidden unless explicitly shown, or clamp to valid range
+    if (selectedMessage >= messages.length) {
+      selectedMessage = messages.length - 1
+    }
+    // Don't auto-show cursor (keep it at -1 until UP is pressed)
     logger.debug("RenderMessages", "Cleared old messages")
 
     if (messages.length === 0) {
@@ -548,13 +1094,36 @@ async function main() {
         separatorBox.add(separatorText)
         messagesScroll.add(separatorBox)
       }
+      const isSelected = msgCount === selectedMessage && focusArea === "messages" && selectedMessage >= 0
       const msgBox = new BoxRenderable(renderer, {
         id: `msg-${msgCount}`,
-        width: msgAreaWidth - 4,
+        width: msgAreaWidth - 2,
         flexDirection: "row",
         justifyContent: msg.fromMe ? "flex-end" : "flex-start",
         marginBottom: 1,
       })
+      
+      // Add cursor indicators if selected - only if cursor is visible (>= 0)
+      if (isSelected) {
+        const cursorLeft = new TextRenderable(renderer, {
+          id: `cursor-left-${msgCount}`,
+          content: ">>> ",
+          fg: "#00FF00", // Bright green
+        })
+        const cursorRight = new TextRenderable(renderer, {
+          id: `cursor-right-${msgCount}`,
+          content: " <<<",
+          fg: "#00FF00", // Bright green
+        })
+        // Add left indicator first
+        msgBox.add(cursorLeft)
+        
+        logger.info("RenderMessages", "ADDED CURSOR INDICATORS", { 
+          msgCount, 
+          isSelected, 
+          focusArea 
+        })
+      }
       
       // Limit bubble width to 70% of message area for better readability
       const maxBubbleWidth = Math.floor(msgAreaWidth * 0.7)
@@ -562,9 +1131,13 @@ async function main() {
         id: `bubble-${msgCount}`,
         backgroundColor: msg.fromMe ? colors.sent : colors.received,
         borderStyle: "rounded",
-        borderColor: msg.fromMe ? colors.sent : colors.border,
-        padding: 1,
+        borderColor: isSelected ? "#00FF00" : (msg.fromMe ? colors.primary : colors.textMuted),
+        paddingLeft: 1,
+        paddingRight: 1,
+        paddingTop: 0,
+        paddingBottom: 0,
         maxWidth: maxBubbleWidth,
+        flexDirection: "column",
       })
       
       // Forwarded message indicator
@@ -597,27 +1170,16 @@ async function main() {
         bubble.add(authorText)
       }
       
-      // Media type icons
-      let mediaIcon = ""
-      if (msg.hasMedia) {
-        switch (msg.type) {
-          case "image": mediaIcon = "📷 "; break
-          case "video": mediaIcon = "🎬 "; break
-          case "audio": mediaIcon = "🎵 "; break
-          case "ptt": mediaIcon = "🎤 "; break
-          case "document": mediaIcon = "📄 "; break
-          case "sticker": mediaIcon = "🏷️ "; break
-          case "location": mediaIcon = "📍 "; break
-          case "contact": mediaIcon = "👤 "; break
-          default: mediaIcon = "📎 "; break
-        }
+      // Main message content
+      const content = msg.body || ""
+      if (content) {
+        const bubbleText = new TextRenderable(renderer, {
+          id: `bubble-text-${msgCount}`,
+          content: truncate(content, msgAreaWidth - 20),
+          fg: colors.text,
+        })
+        bubble.add(bubbleText)
       }
-      const content = msg.body || (msg.hasMedia ? `${mediaIcon}[${msg.type}]` : "")
-      const bubbleText = new TextRenderable(renderer, {
-        id: `bubble-text-${msgCount}`,
-        content: truncate(content, msgAreaWidth - 20),
-        fg: colors.text,
-      })
       
       const date = new Date(msg.timestamp * 1000)
       const timeStr = `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`
@@ -629,7 +1191,7 @@ async function main() {
         if (msg.ack === 0) { ackStr = " ⏳" } // Pending
         else if (msg.ack === 1) { ackStr = " ✓" } // Sent
         else if (msg.ack === 2) { ackStr = " ✓✓" } // Delivered
-        else if (msg.ack >= 3) { ackStr = " ✓✓"; ackColor = "#53BDEB" } // Read (blue)
+        else if (msg.ack === 3) { ackStr = " ✓✓"; ackColor = colors.primary } // Read
       }
       
       // Starred indicator
@@ -641,14 +1203,155 @@ async function main() {
         fg: ackColor,
       })
       
-      bubble.add(bubbleText)
+      // Media rendering - add to bubble BEFORE time
+      if (msg.hasMedia && msg.media && mediaRenderer) {
+        logger.info("RenderMessages", "Rendering media", {
+          mediaType: msg.media.type,
+          filename: msg.media.filename
+        })
+        const mediaLines = await mediaRenderer.render(msg.media, maxBubbleWidth - 4)
+        logger.info("RenderMessages", "Media rendered", { 
+          linesCount: mediaLines.length,
+          firstLine: mediaLines[0]
+        })
+        
+        for (const line of mediaLines) {
+          const mediaText = new TextRenderable(renderer, {
+            id: `media-${msgCount}-${Math.random()}`,
+            content: line,
+            fg: "#00FF00", // Bright green for maximum visibility
+          })
+          bubble.add(mediaText)
+        }
+      } else if (msg.hasMedia) {
+        const fallbackText = new TextRenderable(renderer, {
+          id: `media-fallback-${msgCount}`,
+          content: `[${msg.type} media]`,
+          fg: "#00FF00",
+        })
+        bubble.add(fallbackText)
+      }
+      
       bubble.add(timeText)
       msgBox.add(bubble)
+      
+      // Add right cursor indicator if selected
+      if (isSelected) {
+        const cursorRight = new TextRenderable(renderer, {
+          id: `cursor-right-${msgCount}`,
+          content: " <<<",
+          fg: "#00FF00", // Bright green
+        })
+        msgBox.add(cursorRight)
+      }
+      
       messagesScroll.add(msgBox)
       msgCount++
       logger.debug("RenderMessages", `Added message ${msgCount}`, { fromMe: msg.fromMe, bodyLen: msg.body?.length })
     }
     logger.info("RenderMessages", "Finished renderMessages()", { renderedCount: msgCount })
+  }
+
+  // Settings view rendering
+  function renderSettings() {
+    logger.info("App", "renderSettings() called")
+    
+    // Hide main UI and menu
+    mainBox.visible = false
+    menuBox.visible = false
+    settingsBox.visible = true
+    
+    logger.debug("App", "Visibility set", {
+      mainBox: mainBox.visible,
+      menuBox: menuBox.visible,
+      settingsBox: settingsBox.visible
+    })
+    
+    // Build settings items
+    buildSettingsItems()
+    
+    logger.info("App", "Settings rendered", { 
+      itemsCount: settingsItemIds.length 
+    })
+  }
+  
+  function getSettingsItemCount(sectionIdx: number): number {
+    const currentPage = SETTINGS_PAGES[currentSettingsPage]
+    return currentPage.sections[sectionIdx]?.items.length || 0
+  }
+  
+  function getTotalSettingsItems(): { section: number; item: number }[] {
+    const items: { section: number; item: number }[] = []
+    const currentPage = SETTINGS_PAGES[currentSettingsPage]
+    currentPage.sections.forEach((section, sIdx) => {
+      section.items.forEach((_, iIdx) => {
+        items.push({ section: sIdx, item: iIdx })
+      })
+    })
+    return items
+  }
+  
+  function navigateSettings(direction: "up" | "down") {
+    const allItems = getTotalSettingsItems()
+    const currentIdx = allItems.findIndex(i => i.section === settingsSection && i.item === settingsItem)
+    let newIdx = currentIdx
+    
+    if (direction === "up") {
+      newIdx = Math.max(0, currentIdx - 1)
+    } else {
+      newIdx = Math.min(allItems.length - 1, currentIdx + 1)
+    }
+    
+    settingsSection = allItems[newIdx].section
+    settingsItem = allItems[newIdx].item
+    
+    // Update selection visually
+    buildSettingsItems()
+  }
+  
+  function toggleCurrentSetting() {
+    const section = SETTINGS_MENU[settingsSection]
+    const item = section?.items[settingsItem]
+    if (!item) return
+    
+    // Handle button actions
+    if (item.type === "button") {
+      if (item.id === "clearMediaCache") {
+        logger.info("Settings", "Clearing media cache")
+        const { mediaCache } = require("./utils/mediaCache")
+        mediaCache.clear()
+        statusText.content = "● Media cache cleared"
+        statusText.fg = colors.primary
+        setTimeout(() => {
+          statusText.content = "● Connected"
+        }, 2000)
+        return
+      }
+      // Other button actions
+      if (item.action) {
+        item.action()
+      }
+      return
+    }
+    
+    if (item.type === "toggle" && item.key) {
+      const currentVal = getNestedSetting(item.key)
+      setNestedSetting(item.key, !currentVal)
+      buildSettingsItems()
+    } else if ((item.type === "radio" || item.type === "select") && item.key && item.options) {
+      const currentVal = getNestedSetting(item.key)
+      const currentIdx = item.options.findIndex(o => o.value === currentVal)
+      const nextIdx = (currentIdx + 1) % item.options.length
+      const newVal = item.options[nextIdx].value
+      setNestedSetting(item.key, newVal)
+      buildSettingsItems()
+    } else if (item.type === "number" && item.key) {
+      const currentVal = getNestedSetting(item.key) as number
+      const step = 1
+      const clampedVal = Math.min(item.max || 300, Math.max(item.min || 0, currentVal + step))
+      setNestedSetting(item.key, clampedVal)
+      buildSettingsItems()
+    }
   }
 
   async function selectChat(index: number) {
@@ -659,43 +1362,119 @@ async function main() {
     }
     
     selectedChat = index
+    selectedMessage = -1 // Hide cursor when switching chats
     currentChatId = chats[index].id
     logger.info("App", "Chat selected", { chatId: currentChatId, chatName: chats[index].name })
     updateSelection()
     
     if (DEMO_MODE) {
       messages = [...(DEMO_MESSAGES[currentChatId] || [])]
+      // Mark as read in demo mode
+      chats[index].unreadCount = 0
       logger.debug("App", "Loaded demo messages", { count: messages.length, chatId: currentChatId })
-    } else if (whatsapp) {
-      statusText.content = "○ Loading..."
+    } else if (activeService) {
+      statusText.content = " Loading..."
       statusText.fg = colors.textMuted
       logger.info("App", "Loading messages from WhatsApp", { chatId: currentChatId })
-      messages = await whatsapp.getMessages(currentChatId, 30)
+      messages = await activeService.getMessages(currentChatId, 30)
       logger.info("App", "Messages loaded", { count: messages.length })
-      await whatsapp.markAsRead(currentChatId)
+      await activeService.markAsRead(currentChatId)
+      // Update local unread count
+      chats[index].unreadCount = 0
     }
     
-    renderMessages()
+    // Re-render chats to update unread indicator
+    renderChats()
+    await renderMessages()
     updateChatHeader(chats[index].name, messages.length, chats[index])
     statusText.content = DEMO_MODE ? "● Demo Mode" : "● Connected"
     statusText.fg = colors.primary
+    
+    // Auto-download all media if setting is enabled
+    if (getSettings().autoDownloadMediaOnEnter && !DEMO_MODE && activeService) {
+      logger.info("App", "Auto-downloading media for chat", { chatId: currentChatId })
+      statusText.content = "⏳ Downloading media..."
+      statusText.fg = colors.textMuted
+      
+      // Download in parallel for faster loading
+      const mediaMessages = messages.filter(m => m.hasMedia)
+      logger.info("App", "Found media messages to download", { count: mediaMessages.length })
+      
+      // Download all media files in parallel
+      const downloadPromises = mediaMessages.map(msg => 
+        activeService.downloadMedia(msg.id, currentChatId)
+          .then(() => {
+            logger.debug("App", "Downloaded media", { messageId: msg.id })
+            return { success: true, messageId: msg.id }
+          })
+          .catch((err: any) => {
+            logger.error("App", "Failed to download media", { messageId: msg.id, err })
+            return { success: false, messageId: msg.id, error: err }
+          })
+      )
+      
+      const results = await Promise.all(downloadPromises)
+      const downloaded = results.filter(r => r.success).length
+      
+      statusText.content = `● Downloaded ${downloaded}/${mediaMessages.length} media files`
+      statusText.fg = colors.primary
+      setTimeout(() => {
+        statusText.content = DEMO_MODE ? "● Demo Mode" : "● Connected"
+      }, 2000)
+      
+      // Re-render to show cached media
+      await renderMessages()
+    }
   }
 
-  // Message sending
+  // Message sending/editing
   messageInput.on(InputRenderableEvents.ENTER, async (value: string) => {
     logger.info("MessageInput", "ENTER pressed", { 
       valueLength: value.length, 
       currentChatId, 
       isReady, 
-      DEMO_MODE 
+      DEMO_MODE,
+      isEditing: focusArea === "editing",
+      replyToMessageId
     })
     
-    if (!value.trim()) {
+    if (!value.trim() && focusArea !== "editing") {
       logger.debug("MessageInput", "Empty message, ignoring")
       return
     }
-    if (!currentChatId) {
-      logger.warn("MessageInput", "No chat selected, cannot send")
+    
+    // Handle message editing
+    if (focusArea === "editing" && editingMessageId && currentChatId && activeService) {
+      logger.info("MessageInput", "Editing message", { messageId: editingMessageId, newText: value })
+      statusText.content = "⏳ Editing message..."
+      statusText.fg = colors.textMuted
+      
+      // Call editMessage service method
+      const success = await activeService.editMessage(editingMessageId, currentChatId, value.trim())
+      
+      if (success) {
+        statusText.content = "● Message edited ✓"
+        statusText.fg = colors.primary
+        // Update the message in the UI
+        const msgIdx = messages.findIndex(m => m.id === editingMessageId)
+        if (msgIdx !== -1) {
+          messages[msgIdx].body = value.trim()
+          await renderMessages()
+        }
+      } else {
+        statusText.content = "✗ Failed to edit message"
+        statusText.fg = "#F15C6D"
+      }
+      
+      // Reset editing state
+      editingMessageId = null
+      focusArea = "input"
+      messageInput.value = ""
+      
+      setTimeout(() => {
+        statusText.content = "● Connected"
+        statusText.fg = colors.primary
+      }, 2000)
       return
     }
     
@@ -712,22 +1491,30 @@ async function main() {
       }
       messages.push(newMsg)
       logger.debug("MessageInput", "Added message to messages array", { count: messages.length })
-      renderMessages()
+      await renderMessages()
       messageInput.value = ""
+      replyToMessageId = null // Clear reply reference
       statusText.content = "● Sent!"
       setTimeout(() => { statusText.content = "● Demo Mode" }, 1000)
-    } else if (whatsapp && isReady) {
+    } else if (activeService && isReady) {
       logger.info("MessageInput", "Sending real WhatsApp message", { chatId: currentChatId, body: value.trim().substring(0, 20) })
-      statusText.content = "○ Typing..."
+      statusText.content = "○ Sending..."
       statusText.fg = colors.textMuted
-      messageInput.value = ""
+      logger.info("MessageInput", "Sending message via WhatsApp", { 
+        chatId: currentChatId, 
+        bodyLen: value.length,
+        replyTo: replyToMessageId
+      })
+      // Send message with reply context if replyToMessageId is set
       
       try {
-        const sent = await whatsapp.sendMessage(currentChatId, value.trim())
+        const sent = await activeService.sendMessage(currentChatId, value.trim(), { replyTo: replyToMessageId || undefined })
         if (sent) {
           logger.info("MessageInput", "Message sent successfully", { messageId: sent.id })
           messages.push(sent)
-          renderMessages()
+          await renderMessages()
+          messageInput.value = ""
+          replyToMessageId = null // Clear reply reference
           statusText.content = "● Sent ✓"
           statusText.fg = colors.primary
         } else {
@@ -742,7 +1529,7 @@ async function main() {
       }
       setTimeout(() => { statusText.content = "● Connected"; statusText.fg = colors.primary }, 2000)
     } else {
-      logger.warn("MessageInput", "Cannot send - whatsapp not ready", { hasWhatsapp: !!whatsapp, isReady })
+      logger.warn("MessageInput", "Cannot send - activeService not ready", { hasWhatsapp: !!activeService, isReady })
     }
   })
 
@@ -755,21 +1542,403 @@ async function main() {
       focusArea,
       isReady,
       selectedChat,
-      chatsCount: chats.length
+      chatsCount: chats.length,
+      currentView
     })
+    
+    // CRITICAL: UP from input switches to message selection mode
+    if (focusArea === "input" && key.name === "up" && messages.length > 0) {
+      // Switch to message selection mode with cursor on last message
+      focusArea = "messages"
+      selectedMessage = messages.length - 1
+      await renderMessages()
+      
+      // Scroll to bottom to show last message
+      messagesScroll.scrollTo({ x: 0, y: messagesScroll.scrollHeight })
+      logger.debug("App", "Scrolled to bottom for last message")
+      
+      statusText.content = `📍 Message ${selectedMessage + 1}/${messages.length} (↑↓ nav, Space=media, ↓↓=input)`
+      statusText.fg = colors.primary
+      logger.info("App", "UP from input -> message selection mode at LAST", { selectedMessage })
+      return // Stop event propagation
+    }
+    
+    // Message navigation when in message selection mode
+    if (focusArea === "messages" && messages.length > 0 && (key.name === "up" || key.name === "down" || key.name === "space" || key.name === "return" || key.name === "backspace" || key.name === "delete" || key.name === "insert")) {
+      logger.info("App", "MESSAGE NAVIGATION KEY DETECTED", { 
+        key: key.name, 
+        focusArea, 
+        selectedMessage, 
+        totalMessages: messages.length 
+      })
+      
+      if (key.name === "up") {
+        if (selectedMessage > 0) {
+          selectedMessage--
+          await renderMessages()
+          statusText.content = `📍 Message ${selectedMessage + 1}/${messages.length}`
+          statusText.fg = colors.primary
+          logger.info("App", "Message cursor UP", { selectedMessage })
+        } else {
+          logger.info("App", "Already at first message")
+        }
+        return // Stop event propagation
+      } else if (key.name === "down") {
+        if (selectedMessage < messages.length - 1) {
+          selectedMessage++
+          await renderMessages()
+          statusText.content = `📍 Message ${selectedMessage + 1}/${messages.length}`
+          statusText.fg = colors.primary
+          logger.info("App", "Message cursor DOWN", { selectedMessage })
+        } else {
+          // At last message, DOWN switches to input
+          focusArea = "input"
+          selectedMessage = -1 // Hide cursor again
+          chatListBox.borderColor = colors.border
+          inputArea.borderColor = colors.primary
+          messageInput.focus()
+          await renderMessages()
+          statusText.content = DEMO_MODE ? "● Demo Mode" : "● Connected"
+          statusText.fg = colors.primary
+          logger.info("App", "DOWN from last message -> focus input")
+        }
+        return // Stop event propagation
+      } else if (key.name === "space") {
+        const msg = messages[selectedMessage]
+        if (msg && msg.hasMedia && msg.media && currentChatId && activeService) {
+          logger.info("App", "Opening media from selected message", { messageId: msg.id })
+          try {
+            // Check if file is already cached
+            const chat = chats.find(c => c.id === currentChatId)
+            const chatName = chat?.name || currentChatId
+            const filename = msg.media.filename || 'media'
+            const timestamp = msg.timestamp
+            const mimetype = msg.media.mimetype || 'application/octet-stream'
+            
+            let filePath = mediaCache.get(chatName, filename, timestamp, mimetype)
+            
+            if (filePath) {
+              logger.info("App", "Media already cached, opening directly", { filePath })
+              statusText.content = "● Opening cached media..."
+              statusText.fg = colors.primary
+            } else {
+              logger.info("App", "Media not cached, downloading first", { messageId: msg.id })
+              statusText.content = "⏳ Downloading media..."
+              statusText.fg = colors.textMuted
+              filePath = await activeService.downloadMedia(msg.id, currentChatId)
+            }
+            
+            if (filePath && mediaRenderer) {
+              if (getSettings().mediaDisplayMode === 'http') {
+                const { mediaServer } = await import("./utils/mediaServer")
+                const serverUrl = await mediaServer.start()
+                await mediaRenderer.openMedia(serverUrl)
+              } else {
+                await mediaRenderer.openMedia(filePath)
+              }
+              statusText.content = "● Opened media"
+              statusText.fg = colors.primary
+            } else {
+              statusText.content = "✗ Failed to get media"
+              statusText.fg = "#F15C6D"
+            }
+          } catch (err: any) {
+            logger.error("App", "Failed to open media", err)
+            statusText.content = `✗ ${err.message?.slice(0, 30)}`
+            statusText.fg = "#F15C6D"
+          }
+        } else {
+          statusText.content = "No media in this message"
+          statusText.fg = colors.textMuted
+        }
+        return // Stop event propagation
+      } else if (key.name === "return") {
+        // Enter: Set as reply reference
+        const msg = messages[selectedMessage]
+        if (msg) {
+          replyToMessageId = msg.id
+          statusText.content = `↪ Replying to: ${msg.body?.slice(0, 30) || "[media]"}...`
+          statusText.fg = colors.primary
+          logger.info("App", "Set reply reference", { messageId: msg.id })
+          // Switch to input to type reply
+          focusArea = "input"
+          selectedMessage = -1
+          inputArea.borderColor = colors.primary
+          messageInput.focus()
+          await renderMessages()
+        }
+        return
+      } else if (key.name === "backspace") {
+        // Backspace: Delete message for me
+        const msg = messages[selectedMessage]
+        if (msg && currentChatId && activeService) {
+          logger.info("App", "Deleting message for me", { messageId: msg.id })
+          statusText.content = "⏳ Deleting message for you..."
+          statusText.fg = colors.textMuted
+          
+          const success = await activeService.deleteMessage(msg.id, currentChatId, true)
+          
+          if (success) {
+            statusText.content = "● Message deleted ✓"
+            statusText.fg = colors.primary
+            // Remove from UI
+            const msgIdx = messages.findIndex(m => m.id === msg.id)
+            if (msgIdx !== -1) {
+              messages.splice(msgIdx, 1)
+              if (selectedMessage >= messages.length) {
+                selectedMessage = messages.length - 1
+              }
+              await renderMessages()
+            }
+          } else {
+            statusText.content = "✗ Failed to delete message"
+            statusText.fg = "#F15C6D"
+          }
+          
+          setTimeout(() => {
+            statusText.content = "● Connected"
+            statusText.fg = colors.primary
+          }, 2000)
+        }
+        return
+      } else if (key.name === "delete") {
+        // Delete: Delete message for everyone
+        const msg = messages[selectedMessage]
+        if (msg && currentChatId && activeService) {
+          logger.info("App", "Deleting message for everyone", { messageId: msg.id })
+          statusText.content = "⏳ Deleting message for everyone..."
+          statusText.fg = colors.textMuted
+          
+          const success = await activeService.deleteMessage(msg.id, currentChatId, false)
+          
+          if (success) {
+            statusText.content = "● Message deleted for everyone ✓"
+            statusText.fg = colors.primary
+            // Remove from UI
+            const msgIdx = messages.findIndex(m => m.id === msg.id)
+            if (msgIdx !== -1) {
+              messages.splice(msgIdx, 1)
+              if (selectedMessage >= messages.length) {
+                selectedMessage = messages.length - 1
+              }
+              await renderMessages()
+            }
+          } else {
+            statusText.content = "✗ Failed to delete message for everyone"
+            statusText.fg = "#F15C6D"
+          }
+          
+          setTimeout(() => {
+            statusText.content = "● Connected"
+            statusText.fg = colors.primary
+          }, 2000)
+        }
+        return
+      } else if (key.name === "insert") {
+        // Insert: Edit message in place
+        const msg = messages[selectedMessage]
+        if (msg && msg.fromMe && currentChatId) {
+          logger.info("App", "Editing message", { messageId: msg.id })
+          editingMessageId = msg.id
+          focusArea = "editing"
+          messageInput.value = msg.body || ""
+          messageInput.focus()
+          statusText.content = `✏ Editing message (Enter to save, Esc to cancel)`
+          statusText.fg = colors.primary
+          await renderMessages()
+        } else if (!msg.fromMe) {
+          statusText.content = "✗ Can only edit your own messages"
+          statusText.fg = "#F15C6D"
+        }
+        return
+      }
+    }
+    
+    // Debug: Log ALL keys to help debug F2
+    if (key.name === "f2" || (key.name === "," && key.ctrl)) {
+      logger.info("App", "SETTINGS KEY DETECTED!", { 
+        keyName: key.name, 
+        ctrl: key.ctrl,
+        currentView 
+      })
+    }
     
     // Ctrl+Q or Ctrl+C to quit
     if (key.ctrl && (key.name === "q" || key.name === "c")) {
       logger.info("App", "User requested exit", { key: key.name })
-      if (whatsapp) await whatsapp.destroy()
+      cleanupTerminal()
+      if (activeService) await activeService.destroy()
       process.exit(0)
     }
 
+    // Main menu navigation
+    if (currentView === "main_menu") {
+      if (key.name === "up" && menuSelectedIndex > 0) {
+        menuSelectedIndex--
+        updateMenuSelection()
+        return
+      }
+      if (key.name === "down" && menuSelectedIndex < services.length - 1) {
+        menuSelectedIndex++
+        updateMenuSelection()
+        return
+      }
+      if (key.name === "return") {
+        const service = services[menuSelectedIndex]
+        if (service && service.enabled) {
+          if (service.id === "settings") {
+            // Show settings view instead of entering service
+            currentView = "service"
+            showSettings = true
+            focusArea = "settings"
+            settingsSection = 0
+            settingsItem = 0
+            renderSettings()
+            logger.info("App", "Opened settings from menu")
+          } else {
+            enterService(service.id)
+          }
+        }
+        return
+      }
+      if (key.name === "q" || key.name === "Q") {
+        cleanupTerminal()
+        if (activeService) await activeService.destroy()
+        process.exit(0)
+      }
+      return
+    }
+
+    // Global settings navigation
+    if (currentView === "global_settings") {
+      if (key.name === "escape") {
+        currentView = "main_menu"
+        showMainMenu()
+        return
+      }
+      if (key.name === "up" && globalSettingsItem > 0) {
+        globalSettingsItem--
+        showGlobalSettingsView()
+        return
+      }
+      if (key.name === "down" && globalSettingsItem < 9) {
+        globalSettingsItem++
+        showGlobalSettingsView()
+        return
+      }
+      return
+    }
+
+    // Escape to go back to main menu from service view
+    if (currentView === "service" && key.name === "escape" && focusArea === "chats" && !showSettings) {
+      exitToMainMenu()
+      return
+    }
+
+    // Ctrl+, or F2 to open settings (only in service view)
+    if (currentView === "service" && ((key.name === "," && key.ctrl) || key.name === "f2")) {
+      logger.info("App", "Settings toggle triggered", { 
+        currentShowSettings: showSettings,
+        keyName: key.name,
+        keyCtrl: key.ctrl 
+      })
+      showSettings = !showSettings
+      if (showSettings) {
+        focusArea = "settings"
+        settingsSection = 0
+        settingsItem = 0
+        renderSettings()
+        logger.info("App", "Settings opened", { 
+          settingsBoxVisible: settingsBox.visible,
+          mainBoxVisible: mainBox.visible 
+        })
+      } else {
+        // Restore service view
+        settingsBox.visible = false
+        mainBox.visible = true
+        menuBox.visible = false
+        renderChats()
+        if (messages.length > 0) await renderMessages()
+        logger.info("App", "Settings closed")
+      }
+      return
+    }
+
+    // Settings navigation when settings view is open
+    if (showSettings) {
+      if (key.name === "escape") {
+        showSettings = false
+        focusArea = "chats"
+        // Restore service view
+        settingsBox.visible = false
+        mainBox.visible = true
+        menuBox.visible = false
+        renderChats()
+        if (messages.length > 0) await renderMessages()
+        logger.debug("App", "Settings closed via Escape")
+        return
+      }
+      if (key.name === "up") {
+        navigateSettings("up")
+        return
+      }
+      if (key.name === "down") {
+        navigateSettings("down")
+        return
+      }
+      if (key.name === "return" || key.name === "space") {
+        toggleCurrentSetting()
+        return
+      }
+      // Left/Right for radio/select to cycle options
+      if (key.name === "left" || key.name === "right") {
+        const currentPage = SETTINGS_PAGES[currentSettingsPage]
+        const section = currentPage.sections[settingsSection]
+        const item = section?.items[settingsItem]
+        if (item && (item.type === "radio" || item.type === "select") && item.key && item.options) {
+          const currentVal = getNestedSetting(item.key)
+          const currentIdx = item.options.findIndex(o => o.value === currentVal)
+          const direction = key.name === "right" ? 1 : -1
+          const nextIdx = (currentIdx + direction + item.options.length) % item.options.length
+          const newVal = item.options[nextIdx].value
+          setNestedSetting(item.key, newVal)
+          renderSettings()
+        } else if (item && item.type === "number" && item.key) {
+          const currentVal = getNestedSetting(item.key) as number
+          const step = key.name === "right" ? 10 : -10
+          const newVal = Math.min(item.max || 300, Math.max(item.min || 0, currentVal + step))
+          setNestedSetting(item.key, newVal)
+          renderSettings()
+        }
+        return
+      }
+      return // Don't process other keys while in settings
+    }
+
     if (key.name === "tab" && isReady) {
-      focusArea = focusArea === "chats" ? "input" : "chats"
-      chatListBox.borderColor = focusArea === "chats" ? colors.primary : colors.border
-      inputArea.borderColor = focusArea === "input" ? colors.primary : colors.border
-      if (focusArea === "input") messageInput.focus()
+      // Cycle through: chats <-> input (only 2 components)
+      if (focusArea === "chats") {
+        focusArea = "input"
+        chatListBox.borderColor = colors.border
+        inputArea.borderColor = colors.primary
+        messageInput.focus()
+        statusText.content = DEMO_MODE ? "● Demo Mode" : "● Connected"
+        statusText.fg = colors.primary
+        logger.info("App", "FOCUS SWITCHED TO INPUT", { focusArea })
+      } else {
+        // From input or messages, go to chats
+        focusArea = "chats"
+        selectedMessage = -1 // Hide cursor
+        chatListBox.borderColor = colors.primary
+        inputArea.borderColor = colors.border
+        statusText.content = DEMO_MODE ? "● Demo Mode" : "● Connected"
+        statusText.fg = colors.primary
+        logger.info("App", "FOCUS SWITCHED TO CHATS", { focusArea })
+      }
+      
+      // Re-render messages to hide cursor
+      if (messages.length > 0) await renderMessages()
+      
       logger.debug("Keyboard", "Tab pressed - switched focus", { focusArea })
     }
 
@@ -787,9 +1956,10 @@ async function main() {
         focusArea = "input"
         chatListBox.borderColor = colors.border
         inputArea.borderColor = colors.primary
-        messageInput.focus()
+        logger.debug("App", "Focus → input")
       }
     }
+    
 
     // Number keys 1-9 for quick chat selection
     if (isReady && key.name && /^[1-9]$/.test(key.name)) {
@@ -804,12 +1974,40 @@ async function main() {
       }
     }
 
-    // Escape to go back to chat list
-    if (key.name === "escape" && focusArea === "input") {
-      focusArea = "chats"
-      chatListBox.borderColor = colors.primary
-      inputArea.borderColor = colors.border
-      logger.debug("App", "Escape - back to chats")
+    // Escape to go back to chat list or cancel editing
+    if (key.name === "escape") {
+      if (focusArea === "editing") {
+        // Cancel editing
+        editingMessageId = null
+        focusArea = "input"
+        messageInput.value = ""
+        statusText.content = "● Cancelled editing"
+        statusText.fg = colors.textMuted
+        setTimeout(() => {
+          statusText.content = "● Connected"
+          statusText.fg = colors.primary
+        }, 1000)
+        logger.info("App", "Cancelled message editing")
+        return
+      } else if (focusArea === "input") {
+        // Clear reply reference
+        if (replyToMessageId) {
+          replyToMessageId = null
+          statusText.content = "● Cancelled reply"
+          statusText.fg = colors.textMuted
+          setTimeout(() => {
+            statusText.content = "● Connected"
+            statusText.fg = colors.primary
+          }, 1000)
+          logger.info("App", "Cancelled reply")
+          return
+        }
+        // Go back to chats
+        focusArea = "chats"
+        chatListBox.borderColor = colors.primary
+        inputArea.borderColor = colors.border
+        logger.debug("App", "Escape - back to chats")
+      }
     }
 
     // ? or F1 for help
@@ -827,12 +2025,12 @@ async function main() {
         "│                                                 │",
         "│  Actions                                        │",
         "│  ───────                                        │",
+        "│  F2/Ctrl+,  Open Settings                       │",
         "│  Ctrl+R     Refresh chats                       │",
         "│  Ctrl+P     Pin/Unpin chat                      │",
         "│  Ctrl+M     Mute/Unmute chat                    │",
         "│  Ctrl+A     Archive chat                        │",
         "│  Ctrl+Q     Quit application                    │",
-        "│  Ctrl+C     Quit application                    │",
         "│                                                 │",
         "│  Press any key to close this help               │",
         "╰─────────────────────────────────────────────────╯",
@@ -845,29 +2043,29 @@ async function main() {
     }
 
     // Ctrl+R to refresh chats
-    if (key.ctrl && key.name === "r" && isReady && whatsapp) {
+    if (key.ctrl && key.name === "r" && isReady && activeService) {
       logger.info("App", "Refreshing chats")
       statusText.content = "○ Refreshing..."
-      chats = await whatsapp.getChats()
+      chats = await activeService.getChats()
       renderChats()
       updateSelection()
       if (currentChatId) {
-        messages = await whatsapp.getMessages(currentChatId, 30)
-        renderMessages()
+        messages = await activeService.getMessages(currentChatId, 30)
+        await renderMessages()
       }
       statusText.content = "● Connected"
       statusText.fg = colors.primary
     }
 
     // Ctrl+P to pin/unpin chat
-    if (key.ctrl && key.name === "p" && isReady && currentChatId && whatsapp) {
+    if (key.ctrl && key.name === "p" && isReady && currentChatId && activeService) {
       const chat = chats[selectedChat]
       if (chat) {
         logger.info("App", "Toggling pin", { chatId: currentChatId, currentPin: chat.pinned })
         statusText.content = chat.pinned ? "○ Unpinning..." : "○ Pinning..."
-        const success = await whatsapp.pinChat(currentChatId, !chat.pinned)
+        const success = await activeService.pinChat(currentChatId, !chat.pinned)
         if (success) {
-          chats = await whatsapp.getChats()
+          chats = await activeService.getChats()
           renderChats()
           updateSelection()
           statusText.content = chat.pinned ? "● Unpinned" : "● Pinned"
@@ -879,14 +2077,14 @@ async function main() {
     }
 
     // Ctrl+M to mute/unmute chat
-    if (key.ctrl && key.name === "m" && isReady && currentChatId && whatsapp) {
+    if (key.ctrl && key.name === "m" && isReady && currentChatId && activeService) {
       const chat = chats[selectedChat]
       if (chat) {
         logger.info("App", "Toggling mute", { chatId: currentChatId, currentMute: chat.muted })
         statusText.content = chat.muted ? "○ Unmuting..." : "○ Muting..."
-        const success = await whatsapp.muteChat(currentChatId, !chat.muted)
+        const success = await activeService.muteChat(currentChatId, !chat.muted)
         if (success) {
-          chats = await whatsapp.getChats()
+          chats = await activeService.getChats()
           renderChats()
           updateSelection()
           statusText.content = chat.muted ? "● Unmuted" : "● Muted"
@@ -898,14 +2096,14 @@ async function main() {
     }
 
     // Ctrl+A to archive chat
-    if (key.ctrl && key.name === "a" && isReady && currentChatId && whatsapp) {
+    if (key.ctrl && key.name === "a" && isReady && currentChatId && activeService) {
       const chat = chats[selectedChat]
       if (chat) {
         logger.info("App", "Archiving chat", { chatId: currentChatId })
         statusText.content = "○ Archiving..."
-        const success = await whatsapp.archiveChat(currentChatId, true)
+        const success = await activeService.archiveChat(currentChatId, true)
         if (success) {
-          chats = await whatsapp.getChats()
+          chats = await activeService.getChats()
           renderChats()
           updateSelection()
           statusText.content = "● Archived"
@@ -917,104 +2115,13 @@ async function main() {
     }
   })
 
-  // Initialize
-  if (DEMO_MODE) {
-    logger.info("App", "Demo mode - rendering chats")
-    renderChats()
-    updateSelection()
-  } else if (whatsapp) {
-    logger.info("App", "Setting up WhatsApp event handlers in main")
-    
-    whatsapp.on("qr", (qr: string) => {
-      logger.event("App", "qr received in main")
-      statusText.content = "○ Scan QR..."
-      loadingText.content = "Scan QR code\nin terminal"
-      whatsapp.displayQrCode(qr)
-    })
-
-    whatsapp.on("authenticated", () => {
-      logger.event("App", "authenticated in main")
-      statusText.content = "○ Authenticated..."
-      loadingText.content = "Loading..."
-    })
-
-    whatsapp.on("ready", async () => {
-      logger.event("App", "ready in main - WhatsApp client is ready!")
-      logger.info("App", "Setting isReady to true")
-      isReady = true
-      statusText.content = "○ Loading chats..."
-      logger.info("App", "Loading chats after ready event")
-      
-      try {
-        logger.debug("App", "Calling whatsapp.getChats()...")
-        chats = await whatsapp.getChats()
-        logger.info("App", "Chats loaded successfully", { 
-          count: chats.length,
-          firstChat: chats[0]?.name,
-          lastChat: chats[chats.length - 1]?.name
-        })
-        
-        if (chats.length === 0) {
-          logger.warn("App", "No chats returned from WhatsApp!")
-        }
-        
-        logger.debug("App", "Calling renderChats()...")
-        renderChats()
-        logger.debug("App", "Calling updateSelection()...")
-        updateSelection()
-        
-        statusText.content = "● Connected"
-        statusText.fg = colors.primary
-        logger.info("App", "Ready event handling complete")
-      } catch (err: any) {
-        logger.error("App", "Error loading chats in ready handler", err)
-        statusText.content = `✗ Load error: ${err.message?.slice(0, 20)}`
-        statusText.fg = "#F15C6D"
-      }
-    })
-
-    whatsapp.on("message", async () => {
-      logger.event("App", "message in main")
-      if (currentChatId) {
-        messages = await whatsapp.getMessages(currentChatId, 30)
-        renderMessages()
-      }
-      chats = await whatsapp.getChats()
-      renderChats()
-      updateSelection()
-    })
-
-    whatsapp.on("disconnected", (reason: string) => {
-      logger.event("App", "disconnected in main", { reason })
-      isReady = false
-      statusText.content = `✗ ${reason}`
-      statusText.fg = "#F15C6D"
-    })
-
-    // Typing indicator
-    whatsapp.on("typing", ({ chatId, isTyping }: { chatId: string; isTyping: boolean }) => {
-      logger.event("App", "typing indicator", { chatId, isTyping, currentChatId })
-      if (chatId === currentChatId) {
-        if (isTyping) {
-          chatHeaderMsgCount.content = " typing..."
-          chatHeaderMsgCount.fg = colors.primary
-        } else {
-          chatHeaderMsgCount.content = messages.length > 0 ? ` (${messages.length} messages)` : ""
-          chatHeaderMsgCount.fg = colors.textMuted
-        }
-      }
-    })
-
-    logger.info("App", "Calling whatsapp.initialize()")
-    try {
-      await whatsapp.initialize()
-      logger.info("App", "whatsapp.initialize() completed")
-    } catch (err: any) {
-      logger.error("App", "whatsapp.initialize() failed", err)
-      statusText.content = `✗ ${err.message?.slice(0, 30) || "Error"}`
-      statusText.fg = "#F15C6D"
-    }
-  }
+  // Initialize - show main menu first
+  currentView = "main_menu"
+  mainBox.visible = false
+  menuBox.visible = true
+  updateMenuSelection()
+  
+  logger.info("App", "Main menu initialized")
   
   // Periodic state logging every 30 seconds
   setInterval(() => {
@@ -1052,6 +2159,16 @@ process.on("unhandledRejection", (reason, promise) => {
   console.error("Unhandled Rejection:", reason)
 })
 
+// Signal handlers for graceful shutdown
+process.on("SIGTERM", () => {
+  logger.info("Process", "Received SIGTERM - shutting down")
+  process.exit(0)
+})
+
+process.on("SIGINT", () => {
+  logger.info("Process", "Received SIGINT - shutting down")
+  process.exit(0)
+})
 // Signal handlers for graceful shutdown
 process.on("SIGTERM", () => {
   logger.info("Process", "Received SIGTERM - shutting down")

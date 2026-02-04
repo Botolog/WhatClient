@@ -1,28 +1,50 @@
-name: Build and publish snap
+name: Publish Snap to Store
+
 on:
-  push:
-    branches: [ main ]
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      snap-filename:
+        description: "Name of the snap file to publish"
+        required: false
+        type: string
+        default: "chitchat_*.snap"
+      channel:
+        description: "Snap Store channel to publish to"
+        required: false
+        type: string
+        default: "stable"
+    secrets:
+      SNAPCRAFT_TOKEN:
+        required: true
 
 jobs:
-  build-and-release:
-    runs-on: ubuntu-latest
+  publish:
+    runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Install snapcraft with retries
+      - name: Install snapcraft
         run: |
-          for i in 1 2 3; do
-            sudo snap install snapcraft --classic && break || sleep 10
-          done
+          sudo snap install snapcraft --classic
 
-      - name: Build snap
-        run: |
-          mkdir -p build
-          snapcraft --destructive-mode --output-file=build/${{ github.repository }}.snap
+      - name: Download snap artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: snap-package
 
-      - name: Upload and release to Snap Store
+      - name: Login to Snap Store
         env:
-          SNAPCRAFT_TOKEN: ${{ secrets.SNAPCRAFT_TOKEN }}
+          SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_TOKEN }}
         run: |
-          snapcraft upload build/*.snap --release=stable
+          echo "$SNAPCRAFT_STORE_CREDENTIALS" | snapcraft login --with -
+
+      - name: Publish to Snap Store
+        run: |
+          SNAP_FILE="${{ inputs.snap-filename }}"
+          CHANNEL="${{ inputs.channel }}"
+          echo "Publishing $SNAP_FILE to $CHANNEL channel..."
+          snapcraft upload --release=$CHANNEL $SNAP_FILE
+          echo "✓ Successfully published to $CHANNEL!"
+
+      - name: Get snap info
+        run: |
+          snapcraft status chitchat

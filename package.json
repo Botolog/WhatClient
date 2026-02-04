@@ -1,6 +1,8 @@
 {
   "dependencies": {
     "@opentui/core": "^0.1.77",
+    "@slack/socket-mode": "^2.0.5",
+    "@slack/web-api": "^7.13.0",
     "qrcode-terminal": "^0.12.0",
     "whatsapp-web.js": "^1.34.6",
     "yargs": "^17.7.2"
@@ -22,7 +24,10 @@
     "start": "bun run src/index.ts",
     "demo": "bun run src/index.ts --demo",
     "dev": "bun --watch run src/index.ts",
-    "test:whatsapp": "bun run src/test-whatsapp.ts"
+    "test:whatsapp": "bun run src/test-whatsapp.ts",
+    "build": "bun build src/index.ts --compile --minify --target=bun --outfile build/chitchat",
+    "build:snap": "snapcraft --use-lxd",
+    "build:snap-clean": "snapcraft clean && snapcraft --use-lxd"
   },
   "repository": {
     "type": "git",

@@ -1,0 +1,45 @@
+name: Release Pipeline
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: "Snap Store channel"
+        required: false
+        type: choice
+        options:
+          - stable
+          - candidate
+          - beta
+          - edge
+        default: "stable"
+      skip-publish:
+        description: "Skip publishing to store (build only)"
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  build-bun:
+    name: "Step 1: Build Bun Executable"
+    uses: ./.github/workflows/build-bun.yml
+
+  build-snap:
+    name: "Step 2: Build Snap Package"
+    needs: build-bun
+    uses: ./.github/workflows/build-snap.yml
+    with:
+      use-prebuilt-executable: true
+
+  publish:
+    name: "Step 3: Publish to Snap Store"
+    needs: build-snap
+    if: ${{ !inputs.skip-publish }}
+    uses: ./.github/workflows/publish-snap.yml
+    with:
+      snap-filename: ${{ needs.build-snap.outputs.snap-filename }}
+      channel: ${{ inputs.channel || 'stable' }}
+    secrets:
+      SNAPCRAFT_TOKEN: ${{ secrets.SNAPCRAFT_TOKEN }}

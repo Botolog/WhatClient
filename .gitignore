@@ -12,6 +12,9 @@ node_modules
 .vscode
 .wwebjs_auth
 .wwebjs_cache
+.whatclient-settings.json
+.slack-tokens.json
+.media-cache/
 
 # Log files
 *.log
@@ -20,3 +23,12 @@ whatsapp-test.log
 
 # Build output
 dist/
+build/
+
+# Snap build artifacts
+*.snap
+parts/
+prime/
+stage/
+*.snap-build
+

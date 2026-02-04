@@ -1,0 +1,65 @@
+name: Build Bun Executable
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'src/**'
+      - 'package.json'
+      - 'tsconfig.json'
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+  workflow_call:
+    outputs:
+      executable-path:
+        description: "Path to the built executable"
+        value: ${{ jobs.build.outputs.executable-path }}
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    outputs:
+      executable-path: ${{ steps.build-exe.outputs.executable-path }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build executable
+        id: build-exe
+        run: |
+          echo "Building chitchat with Bun..."
+          mkdir -p build
+          
+          bun build src/index.ts \
+            --compile \
+            --minify \
+            --sourcemap \
+            --target=bun \
+            --outfile build/chitchat
+          
+          chmod +x build/chitchat
+          echo "executable-path=build/chitchat" >> $GITHUB_OUTPUT
+          echo "✓ Build complete! Executable: build/chitchat"
+
+      - name: Test executable
+        run: |
+          ./build/chitchat --help || true
+          ls -lh build/chitchat
+
+      - name: Upload executable artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bun-executable
+          path: build/chitchat
+          retention-days: 30
+          if-no-files-found: error

@@ -1,0 +1,67 @@
+name: Build Snap Package
+
+on:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      use-prebuilt-executable:
+        description: "Use pre-built executable from artifact"
+        required: false
+        type: boolean
+        default: false
+    outputs:
+      snap-filename:
+        description: "The filename of the built snap"
+        value: ${{ jobs.build.outputs.snap-filename }}
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    outputs:
+      snap-filename: ${{ steps.build-snap.outputs.snap-filename }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download pre-built executable (if available)
+        if: ${{ inputs.use-prebuilt-executable }}
+        uses: actions/download-artifact@v4
+        with:
+          name: bun-executable
+          path: build/
+        continue-on-error: true
+
+      - name: Install snapcraft and LXD
+        run: |
+          sudo snap install snapcraft --classic
+          sudo snap install lxd
+          sudo lxd init --auto
+          sudo usermod -a -G lxd $USER
+          sudo chown root:lxd /var/snap/lxd/common/lxd/unix.socket
+          sudo chmod g+rw /var/snap/lxd/common/lxd/unix.socket
+
+      - name: Build snap package
+        id: build-snap
+        run: |
+          echo "Building snap package..."
+          sg lxd -c 'snapcraft pack'
+          SNAP_FILE=$(ls chitchat_*.snap)
+          echo "snap-filename=$SNAP_FILE" >> $GITHUB_OUTPUT
+          echo "✓ Built snap: $SNAP_FILE"
+
+      - name: Upload snap artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: snap-package
+          path: chitchat_*.snap
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Verify snap package
+        run: |
+          echo "Installing snap for verification..."
+          sudo snap install --dangerous chitchat_*.snap
+          snap info chitchat
+          echo "✓ Snap package verified!"
+          sudo snap remove chitchat

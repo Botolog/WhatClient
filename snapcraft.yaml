@@ -1,21 +1,77 @@
-name: chitchat       # must be registered in Snap Store
+name: chitchat
+base: core22
 version: '0.0.1a'
-summary: MultiService Chat tui
+summary: Universal Terminal Messaging Client
 description: |
-  supports whats app (more coming soon!)
+  ChitChat is a terminal-based messaging client that supports multiple platforms.
+  Currently supports WhatsApp and Slack, with more services coming soon!
+  
+  Features:
+  - Clean TUI interface built with OpenTUI
+  - Multi-service support (WhatsApp, Slack)
+  - Media support (images, documents, audio)
+  - QR code authentication for WhatsApp
+  - Demo mode for testing
+  
+  Usage: chitchat [--demo]
 
-confinement: strict        # or "classic" if needed (classic requires store approval)
+license: ISC
+website: https://github.com/Botolog/WhatClient
+issues: https://github.com/Botolog/WhatClient/issues
+source-code: https://github.com/Botolog/WhatClient
+
+confinement: strict
 grade: stable
 
+architectures:
+  - build-on: amd64
+  - build-on: arm64
+
 apps:
-  myapp:
-    command: bin/your-executable   # path inside snap
-    plugs: [network]               # add needed interfaces
+  chitchat:
+    command: bin/chitchat
+    plugs:
+      - network
+      - network-bind
+      - home
+    environment:
+      HOME: $SNAP_USER_COMMON
 
 parts:
-  myapp-part:
-    plugin: dump                   # or "make", "python", "nodejs", etc.
+  bun:
+    plugin: nil
+    build-packages:
+      - curl
+      - unzip
+    override-build: |
+      # Install Bun
+      curl -fsSL https://bun.sh/install | bash
+      cp -r $HOME/.bun $CRAFT_PART_INSTALL/
+    stage:
+      - .bun/bin/bun
+
+  chitchat:
+    plugin: nil
     source: .
-    organize:
-      path/to/built/binary: bin/your-executable
-    build-packages: [build-essential] # if building native code
+    after: [bun]
+    build-packages:
+      - curl
+      - git
+    override-build: |
+      # Set up Bun in PATH
+      export PATH="$CRAFT_STAGE/.bun/bin:$PATH"
+      
+      # Install dependencies
+      bun install --frozen-lockfile
+      
+      # Build the application
+      bun build src/index.ts \
+        --compile \
+        --minify \
+        --target=bun \
+        --outfile $CRAFT_PART_INSTALL/bin/chitchat
+      
+      # Make executable
+      chmod +x $CRAFT_PART_INSTALL/bin/chitchat
+    stage:
+      - bin/chitchat
