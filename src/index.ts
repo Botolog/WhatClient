@@ -167,7 +167,8 @@ process.on('SIGTERM', () => { cleanupTerminal(); process.exit(0) })
 process.on('uncaughtException', (err) => { 
   cleanupTerminal()
   console.error('Uncaught exception:', err)
-  process.exit(1)
+  logger.error("App", `Uncaught exception: ${err}`)
+  process.exit(2)
 })
 
 async function main() {
