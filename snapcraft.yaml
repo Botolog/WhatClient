@@ -1,4 +1,4 @@
-name: chatter       # must be registered in Snap Store
+name: chitchat       # must be registered in Snap Store
 version: '0.0.1a'
 summary: MultiService Chat tui
 description: |
